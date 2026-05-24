@@ -1,19 +1,11 @@
 import logging
-from langchain_groq import ChatGroq
 from groq import RateLimitError
 from config.settings import settings
+from config.llm_factory import build_groq, get_fallback_llm
 from nodes.analyst_node import analyst_node
 from state.analyst_state import BrandAnalystOutput
 
 logger = logging.getLogger("research_agent.agents.analyst_agent")
-
-
-def build_llm(api_key: str) -> ChatGroq:
-    return ChatGroq(
-        model=settings.LLM_MODEL,
-        temperature=0.2,
-        groq_api_key=api_key
-    )
 
 
 class BrandAnalystAgent:
@@ -24,12 +16,10 @@ class BrandAnalystAgent:
 
     def __init__(self) -> None:
         logger.info("Initializing Brand Analyst Agent.")
-        self.primary_key = settings.GROQ_API_KEY.get_secret_value()
-        self.fallback_key = (
-            settings.GROQ_API_KEY_2.get_secret_value()
-            if settings.GROQ_API_KEY_2 else None
+        self.llm = build_groq(
+            api_key=settings.GROQ_API_KEY.get_secret_value(),
+            temperature=0.2
         )
-        self.llm = build_llm(self.primary_key)
 
     async def execute_analysis(
         self,
@@ -37,31 +27,27 @@ class BrandAnalystAgent:
         research_report: str,
         insights: list[str]
     ) -> BrandAnalystOutput:
-        """
-        Runs brand positioning analysis on research output.
-        Auto-switches to fallback key on rate limit.
-        """
-        try:
-            logger.info(f"Triggering brand analysis for: '{idea[:50]}...'")
+        """Runs brand positioning analysis. Auto-switches LLM on rate limit."""
+
+        async def run(llm):
             return await analyst_node(
                 idea=idea,
                 research_report=research_report,
                 insights=insights,
-                llm=self.llm
+                llm=llm
             )
 
+        try:
+            logger.info(f"Starting brand analysis for: '{idea[:50]}...'")
+            return await run(self.llm)
+
         except RateLimitError as e:
-            if "tokens per day" in str(e) and self.fallback_key:
-                logger.warning("Primary key rate limited. Switching to fallback.")
-                self.llm = build_llm(self.fallback_key)
-                return await analyst_node(
-                    idea=idea,
-                    research_report=research_report,
-                    insights=insights,
-                    llm=self.llm
-                )
+            if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
+                logger.warning("Primary LLM rate limited. Switching to fallback.")
+                self.llm = get_fallback_llm(temperature=0.2)
+                return await run(self.llm)
             raise
 
         except Exception as exc:
-            logger.error(f"Brand analyst execution failed: {str(exc)}", exc_info=True)
+            logger.error(f"Brand analyst failed: {str(exc)}", exc_info=True)
             raise exc
