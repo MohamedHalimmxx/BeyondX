@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -7,6 +7,7 @@ class AppSettings(BaseSettings):
     """System-wide configuration registry validating active environment configurations."""
 
     # API Keys & Third-Party Infrastructure Endpoints
+    GROQ_API_KEY_2: Optional[SecretStr] = Field(default=None, description="Fallback Groq key if primary hits rate limit.")
     GROQ_API_KEY: SecretStr = Field(
         ..., 
         description="Primary authentication vector for Groq Cloud API infrastructure."
@@ -15,6 +16,10 @@ class AppSettings(BaseSettings):
         ..., 
         description="Target API key credential utilized by the underlying web discovery tool."
     )
+    GOOGLE_PLACES_API_KEY: SecretStr = Field(
+    ...,
+    description="Google Places API key for local competitor discovery."
+)
 
     LLM_MODEL: str = Field(
         default="llama-3.3-70b-versatile", 
@@ -29,7 +34,7 @@ class AppSettings(BaseSettings):
     DEFAULT_MAX_ITERATIONS: int = Field(
         default=3, 
         ge=1, 
-        le=5, 
+        le=10, 
         description="Global maximum upper bounds depth threshold for analytical looping."
     )
 

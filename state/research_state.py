@@ -19,7 +19,7 @@ class ResearchState(TypedDict):
 class ResearchStateInput(BaseModel):
     """Pydantic model used to strictly validate incoming user payloads."""
     idea: str = Field(..., description="The startup or business concept requiring market analysis.")
-    max_iterations: int = Field(default=3, ge=1, le=5, description="Maximum execution depth allowed.")
+    max_iterations: int = Field(default=3, ge=1, le=10, description="Maximum execution depth allowed.")
 
 
 class ReflectionVerdict(BaseModel):
