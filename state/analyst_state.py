@@ -37,8 +37,8 @@ class CompetitorProfile(BaseModel):
     distribution_channels: str = Field(..., description="How customers access them — delivery, physical, app, online")
 
     # Direct from customer language
-    top_strengths: list[str] = Field(..., description="What customers consistently praise — quoted from reviews")
-    top_weaknesses: list[str] = Field(..., description="What customers consistently complain about — from reviews")
+    top_strengths: list[str] = Field(default_factory=list, description="What customers consistently praise — quoted from reviews. Empty list if no data available.")
+    top_weaknesses: list[str] = Field(default_factory=list, description="What customers consistently complain about — from reviews. Empty list if no data available.")
 
     # Transparency
     evidence_summary: str = Field(..., description="Brief summary of what data was used to score this competitor")
@@ -91,3 +91,33 @@ class BrandAnalystOutput(BaseModel):
         ...,
         description="The specific advantage the new brand has if it takes the recommended position"
     )
+
+
+class PositioningStatement(BaseModel):
+    """
+    A structured brand positioning statement derived from white space analysis.
+    Bridges the brand analyst output to the strategy writer input.
+    """
+    for_audience: str = Field(..., description="The specific target audience")
+    who_need: str = Field(..., description="The specific need or frustration they have")
+    brand_name_placeholder: str = Field(default="[Brand Name]", description="Placeholder until strategy writer names the brand")
+    is_the: str = Field(..., description="The category the brand competes in")
+    that: str = Field(..., description="The single key differentiator")
+    unlike: str = Field(..., description="The main competitor being differentiated from")
+    we: str = Field(..., description="The proof point — why this is believable")
+    full_statement: str = Field(..., description="The complete formatted positioning statement")
+
+
+class PositioningStatement(BaseModel):
+    """
+    A structured brand positioning statement derived from white space analysis.
+    Bridges the brand analyst output to the strategy writer input.
+    """
+    for_audience: str = Field(..., description="The specific target audience")
+    who_need: str = Field(..., description="The specific need or frustration they have")
+    brand_name_placeholder: str = Field(default="[Brand Name]", description="Placeholder until strategy writer names the brand")
+    is_the: str = Field(..., description="The category the brand competes in")
+    that: str = Field(..., description="The single key differentiator")
+    unlike: str = Field(..., description="The main competitor being differentiated from")
+    we: str = Field(..., description="The proof point — why this is believable")
+    full_statement: str = Field(..., description="The complete formatted positioning statement")

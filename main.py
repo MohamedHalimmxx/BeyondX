@@ -5,6 +5,10 @@ from dotenv import load_dotenv
 from config.settings import settings
 from agents.research_agent import AutonomousResearchAgent
 from agents.analyst_agent import BrandAnalystAgent
+from nodes.analyst_node import generate_positioning_statement
+from utils.brand_brief import collect_brand_brief
+from utils.positioning_map import render_positioning_map
+from config.llm_factory import get_primary_llm
 
 load_dotenv()
 
@@ -28,6 +32,9 @@ async def main() -> None:
             print("Error: Business idea cannot be empty.")
             return
 
+        # Brand Brief Questions — collect before research runs
+        brand_brief = collect_brand_brief(user_idea)
+
         # Stage 1 — Market Research
         print("\n[Stage 1] Running market research...")
         print("(This may take a minute. Please hold.)\n")
@@ -45,9 +52,18 @@ async def main() -> None:
         # Stage 2 — Brand Analysis
         print("\n[Stage 2] Running full brand positioning analysis...")
         print("(Enriching competitors with real reviews and web data. Please hold.)\n")
+
+        # Enrich idea with client brief answers
+        enriched_idea = (
+            f"{user_idea}\n"
+            f"Client differentiator: {brand_brief.differentiator}\n"
+            f"Ideal customer: {brand_brief.ideal_customer}\n"
+            f"Non-negotiable: {brand_brief.non_negotiable}"
+        )
+
         analyst = BrandAnalystAgent()
         analysis = await analyst.execute_analysis(
-            idea=user_idea,
+            idea=enriched_idea,
             research_report=final_report,
             insights=insights
         )
@@ -55,6 +71,10 @@ async def main() -> None:
         print("\n" + "=" * 70)
         print("BRAND POSITIONING ANALYSIS")
         print("=" * 70)
+
+        # Positioning Map — visual first
+        print("\n## Competitive Positioning Map")
+        print(render_positioning_map(analysis))
 
         print(f"\n## Positioning Axes")
         print(f"  Axis 1: {analysis.positioning_axes.axis_1_label} "
@@ -96,6 +116,26 @@ async def main() -> None:
 
         print(f"\n## Competitive Advantage")
         print(f"  {analysis.competitive_advantage}")
+
+        # Positioning Statement — bridge to strategy writer
+        print("\n[Generating positioning statement...]\n")
+        llm = get_primary_llm()
+        statement = await generate_positioning_statement(
+            idea=enriched_idea,
+            analysis=analysis,
+            llm=llm
+        )
+
+        print("\n" + "=" * 70)
+        print("BRAND POSITIONING STATEMENT")
+        print("=" * 70)
+        print(f"\n  {statement.full_statement}")
+        print(f"\n  For:      {statement.for_audience}")
+        print(f"  Who:      {statement.who_need}")
+        print(f"  Is the:   {statement.is_the}")
+        print(f"  That:     {statement.that}")
+        print(f"  Unlike:   {statement.unlike}")
+        print(f"  We:       {statement.we}")
 
         print("\n" + "=" * 70)
         print("Operation completed successfully.")

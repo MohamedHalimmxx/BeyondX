@@ -36,7 +36,7 @@ Extract structured brand intelligence from this raw data.
 STRICT RULES:
 - Only extract signals explicitly present in the data
 - Quote directly from reviews when identifying strengths and weaknesses
-- If a signal is not in the data, say "insufficient data" — never invent
+- If a signal is not in the data, use an empty list [] for list fields — never use a string where a list is expected
 - Pricing tier must come from actual price mentions or strong signals in the data
 - Target audience must come from who is mentioned in reviews or marketing language
 - Data confidence: high if 3+ strong signals, medium if 1-2 signals, low if mostly inferred"""

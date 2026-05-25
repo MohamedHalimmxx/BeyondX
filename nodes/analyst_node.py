@@ -290,3 +290,56 @@ async def analyst_node(
         f"{len(result.pain_points)} pain points found."
     )
     return result
+
+
+async def generate_positioning_statement(
+    idea: str,
+    analysis: BrandAnalystOutput,
+    llm: BaseChatModel
+) -> "PositioningStatement":
+    """
+    Generates a structured positioning statement from the white space
+    and pain point analysis. Bridges analyst output to strategy writer.
+    """
+    from state.analyst_state import PositioningStatement
+
+    structured_llm = llm.with_structured_output(PositioningStatement)
+
+    white_space = analysis.white_spaces[0] if analysis.white_spaces else None
+    pain_point = analysis.pain_points[0] if analysis.pain_points else None
+    top_competitor = analysis.competitors[0] if analysis.competitors else None
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a senior brand strategist. "
+                "Write a positioning statement using the classic format: "
+                "'For [audience] who [need], [Brand] is the [category] that [differentiator]. "
+                "Unlike [competitor], we [proof point].' "
+                "Every field must be specific and derived from the analysis data provided. "
+                "No generic statements. The full_statement field must be the complete sentence."
+            )
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Business idea: {idea}\n\n"
+                f"Target audience: {analysis.target_audience_summary}\n"
+                f"White space: {white_space.description if white_space else 'Not identified'}\n"
+                f"Primary pain point: {pain_point.description if pain_point else 'Not identified'}\n"
+                f"Main competitor to differentiate from: {top_competitor.name if top_competitor else 'existing players'}\n"
+                f"Competitive advantage: {analysis.competitive_advantage}\n\n"
+                "Generate the positioning statement:"
+            )
+        }
+    ]
+
+    try:
+        return cast(PositioningStatement, await structured_llm.ainvoke(messages))
+    except RateLimitError as e:
+        if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
+            fallback = get_fallback_llm(temperature=0.2)
+            structured_fallback = fallback.with_structured_output(PositioningStatement)
+            return cast(PositioningStatement, await structured_fallback.ainvoke(messages))
+        raise
