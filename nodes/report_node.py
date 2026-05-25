@@ -1,23 +1,17 @@
 import logging
 from typing import Any
 from langchain_core.language_models.chat_models import BaseChatModel
+from groq import RateLimitError
 
 from prompts.research_prompt import REPORT_SYNTHESIS_HUMAN_TEMPLATE, REPORT_SYNTHESIS_SYSTEM_PROMPT
 from state.research_state import ResearchState
+from config.llm_factory import get_fallback_llm
 
 logger = logging.getLogger("research_agent.nodes.report_node")
 
 
 async def report_node(state: ResearchState, config: dict[str, Any]) -> dict[str, Any]:
-    """Synthesizes total research data history into a professional markdown report.
-    
-    Args:
-        state: Comprehensive current operational execution scope.
-        config: Dependency configuration containing structural runtimes.
-        
-    Returns:
-        A state delta containing the generated final_report markdown string.
-    """
+    """Synthesizes total research data history into a professional markdown report."""
     logger.info("Executing Report Node: Initiating final intelligence synthesis.")
 
     idea = state.get("idea", "")
@@ -25,19 +19,16 @@ async def report_node(state: ResearchState, config: dict[str, Any]) -> dict[str,
     gathered_data = state.get("gathered_data", [])
 
     if not insights and not gathered_data:
-        logger.warning("Report Node executed with zero accumulated data indicators. Generating empty template.")
+        logger.warning("Report Node executed with zero accumulated data. Generating empty template.")
         return {
             "final_report": "# Market Research Report\n\nNo empirical research insights were collected during execution."
         }
 
     llm: BaseChatModel | None = config.get("configurable", {}).get("llm")
     if not llm:
-        error_msg = "Critical dependency missing: 'llm' must be injected into graph configuration context."
-        logger.error(error_msg)
-        raise KeyError(error_msg)
+        raise KeyError("Critical dependency missing: 'llm' must be injected into graph configuration context.")
 
     formatted_insights = "\n".join([f"- {insight}" for insight in insights])
-    
     raw_data_summary = "\n\n".join(gathered_data)[:15000]
 
     messages = [
@@ -49,18 +40,24 @@ async def report_node(state: ResearchState, config: dict[str, Any]) -> dict[str,
         )}
     ]
 
+    async def invoke(active_llm):
+        response = await active_llm.ainvoke(messages)
+        return str(response.content).strip()
+
     try:
-        logger.debug("Dispatching aggregate research ledger to LLM for final report compilation.")
-        
-        response = await llm.ainvoke(messages)
-        report_content = str(response.content).strip()
-        
-        logger.info(f"Report Node successfully compiled final document. Total length: {len(report_content)} characters.")
-        
-        return {
-            "final_report": report_content
-        }
+        report_content = await invoke(llm)
+        logger.info(f"Report Node compiled final document. Length: {len(report_content)} characters.")
+        return {"final_report": report_content}
+
+    except RateLimitError as e:
+        if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
+            logger.warning("Report Node: primary LLM rate limited. Switching to fallback.")
+            fallback = get_fallback_llm()
+            report_content = await invoke(fallback)
+            logger.info(f"Report Node compiled via fallback. Length: {len(report_content)} characters.")
+            return {"final_report": report_content}
+        raise
 
     except Exception as exc:
-        logger.critical(f"System failure during report synthesis phase: {str(exc)}", exc_info=True)
+        logger.critical(f"Report Node failure: {str(exc)}", exc_info=True)
         raise exc

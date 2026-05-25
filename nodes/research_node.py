@@ -2,6 +2,7 @@ import logging
 from typing import Any, cast, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel, Field
+from groq import RateLimitError
 
 from prompts.research_prompt import (
     RESEARCH_EXTRACTOR_HUMAN_TEMPLATE,
@@ -11,6 +12,7 @@ from state.research_state import ResearchState
 from tools.search_tool import MarketSearchTool
 from tools.competitor_tool import find_local_competitors
 from tools.market_report_tool import MarketReportTool
+from config.llm_factory import get_fallback_llm
 
 logger = logging.getLogger("research_agent.nodes.research_node")
 
@@ -31,7 +33,7 @@ class DistilledInsightsOutput(BaseModel):
 
 
 async def extract_idea_context(idea: str, question: str, llm: BaseChatModel) -> IdeaContext:
-    """Uses the LLM to extract location, category, and question type from the idea and question."""
+    """Uses the LLM to extract location, category, and question type."""
     structured_llm = llm.with_structured_output(IdeaContext)
     messages = [
         {
@@ -46,7 +48,15 @@ async def extract_idea_context(idea: str, question: str, llm: BaseChatModel) -> 
             "content": f"Business idea: {idea}\nResearch question: {question}"
         }
     ]
-    return await structured_llm.ainvoke(messages)
+    try:
+        return await structured_llm.ainvoke(messages)
+    except RateLimitError as e:
+        if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
+            logger.warning("Context extraction: primary LLM rate limited. Switching to fallback.")
+            fallback = get_fallback_llm()
+            structured_fallback = fallback.with_structured_output(IdeaContext)
+            return await structured_fallback.ainvoke(messages)
+        raise
 
 
 async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[str, Any]:
@@ -67,7 +77,6 @@ async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[st
     if not llm:
         raise KeyError("LLM dependency missing from graph configuration.")
 
-    # Let the LLM extract context — no hardcoding
     context = await extract_idea_context(idea=idea, question=target_question, llm=llm)
     logger.info(f"Extracted context — category: '{context.category}', location: '{context.location}', competitor_q: {context.is_competitor_question}, market_size_q: {context.is_market_size_question}")
 
@@ -77,7 +86,6 @@ async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[st
             category=context.category,
             location=context.location
         )
-
     elif context.is_market_size_question:
         logger.info("Routing to market report tool.")
         report_tool = MarketReportTool()
@@ -85,7 +93,6 @@ async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[st
         raw_search_dump = await report_tool.search(
             query=f"{context.category} market size growth {location_str}".strip()
         )
-
     else:
         logger.info("Routing to general Tavily search.")
         search_tool = MarketSearchTool()
@@ -94,7 +101,6 @@ async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[st
             query=f"{context.category} {location_str} {target_question}".strip()
         )
 
-    structured_llm = llm.with_structured_output(DistilledInsightsOutput)
     messages = [
         {"role": "system", "content": RESEARCH_EXTRACTOR_SYSTEM_PROMPT},
         {"role": "user", "content": RESEARCH_EXTRACTOR_HUMAN_TEMPLATE.format(
@@ -104,16 +110,38 @@ async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[st
         )}
     ]
 
-    try:
-        raw_response = await structured_llm.ainvoke(messages)
-        distilled = cast(DistilledInsightsOutput, raw_response)
-        logger.info(f"Extracted {len(distilled.findings)} findings.")
+    async def invoke_extraction(active_llm):
+        structured = active_llm.with_structured_output(DistilledInsightsOutput)
+        return cast(DistilledInsightsOutput, await structured.ainvoke(messages))
 
+    try:
+        distilled = await invoke_extraction(llm)
+        logger.info(f"Extracted {len(distilled.findings)} findings.")
         return {
             "gathered_data": [f"Question: {target_question}\n{raw_search_dump}"],
             "insights": distilled.findings,
             "iteration": current_idx + 1
         }
+
+    except RateLimitError as e:
+        if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
+            logger.warning("Research extraction: primary LLM rate limited. Switching to fallback.")
+            try:
+                fallback = get_fallback_llm()
+                distilled = await invoke_extraction(fallback)
+                logger.info(f"Extracted {len(distilled.findings)} findings via fallback.")
+                return {
+                    "gathered_data": [f"Question: {target_question}\n{raw_search_dump}"],
+                    "insights": distilled.findings,
+                    "iteration": current_idx + 1
+                }
+            except Exception:
+                logger.error("Fallback also failed. Returning raw data without extraction.")
+                return {
+                    "gathered_data": [f"Question: {target_question}\n{raw_search_dump}"],
+                    "iteration": current_idx + 1
+                }
+        raise
 
     except Exception as exc:
         logger.error(f"Research node error: {str(exc)}", exc_info=True)
