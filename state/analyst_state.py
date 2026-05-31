@@ -30,8 +30,8 @@ class CompetitorProfile(BaseModel):
     axis_2_score: float = Field(..., ge=0, le=10, description="Score on axis 2 based on evidence")
 
     # Evidence-based signals extracted from reviews and online data
-    pricing_tier: str = Field(..., description="budget / mid-range / premium / luxury — from pricing signals in data")
-    service_style: str = Field(..., description="How they deliver their core offering — from menu/product data")
+    pricing_tier: Optional[str] = None
+    service_style: Optional[str] = None
     brand_personality: str = Field(..., description="Their voice and identity — from marketing language and reviews")
     target_audience: str = Field(..., description="Who actually buys from them — from review demographics and context")
     distribution_channels: str = Field(..., description="How customers access them — delivery, physical, app, online")

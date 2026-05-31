@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from config.settings import settings
 from agents.research_agent import AutonomousResearchAgent
 from agents.analyst_agent import BrandAnalystAgent
+from agents.strategy_agent import StrategyWriterAgent 
 from nodes.analyst_node import generate_positioning_statement
 from utils.brand_brief import collect_brand_brief
 from utils.positioning_map import render_positioning_map
@@ -23,7 +24,7 @@ logger = logging.getLogger("research_agent.main")
 
 async def main() -> None:
     print("=" * 70)
-    print("BRANDGENIUS — MARKET RESEARCH + BRAND ANALYSIS")
+    print("BRANDGENIUS — MARKET RESEARCH + BRAND ANALYSIS + GO-TO-MARKET")
     print("=" * 70)
 
     try:
@@ -73,8 +74,9 @@ async def main() -> None:
         print("=" * 70)
 
         # Positioning Map — visual first
+        positioning_map_string = render_positioning_map(analysis) # Save map to variable for reuse
         print("\n## Competitive Positioning Map")
-        print(render_positioning_map(analysis))
+        print(positioning_map_string)
 
         print(f"\n## Positioning Axes")
         print(f"  Axis 1: {analysis.positioning_axes.axis_1_label} "
@@ -136,6 +138,25 @@ async def main() -> None:
         print(f"  That:     {statement.that}")
         print(f"  Unlike:   {statement.unlike}")
         print(f"  We:       {statement.we}")
+
+
+        # Stage 3 — Strategy Writer Execution Loop
+        print("\n" + "=" * 70)
+        print("[Stage 3] Compiling custom Go-To-Market strategy playbook...")
+        print("(Translating competitor intelligence into dynamic copy hooks. Please hold.)\n")
+
+        strategist = StrategyWriterAgent()
+        strategy_playbook = await strategist.generate_plan({
+            "idea": enriched_idea,
+            "research_report": final_report,
+            "positioning_statement": statement.full_statement,
+            "positioning_map_ascii": positioning_map_string
+        })
+
+        print("\n" + "=" * 70)
+        print("STRATEGIC GO-TO-MARKET PLAYBOOK GENERATED")
+        print("=" * 70)
+        print(strategy_playbook)
 
         print("\n" + "=" * 70)
         print("Operation completed successfully.")

@@ -48,7 +48,7 @@ class AppSettings(BaseSettings):
         description="Temperature for all LLM calls."
     )
     DEFAULT_MAX_ITERATIONS: int = Field(
-        default=7,
+        default=2,
         ge=1,
         le=10,
         description="Max research loop iterations."
