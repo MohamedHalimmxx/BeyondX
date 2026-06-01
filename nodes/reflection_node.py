@@ -83,5 +83,9 @@ async def reflection_node(state: ResearchState, config: dict[str, Any]) -> dict[
     logger.info(f"Reflection complete. Is Complete: {verdict.is_complete}. Reasoning: {verdict.reasoning}")
     return {
         "is_complete": verdict.is_complete,
-        "reflection_reasoning": verdict.reasoning
+        "reflection_reasoning": verdict.reasoning,
+        "reflection_verdict": {
+            "is_complete": verdict.is_complete,
+            "reasoning": verdict.reasoning
+        }
     }

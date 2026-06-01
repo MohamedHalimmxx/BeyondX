@@ -1,7 +1,7 @@
 import logging
 from typing import Any, cast, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from groq import RateLimitError
 from openai import RateLimitError as CerebrasRateLimitError
 import asyncio
@@ -24,6 +24,20 @@ class IdeaContext(BaseModel):
     location: Optional[str] = Field(default=None, description="City or country only if explicitly mentioned. Never invent.")
     is_competitor_question: bool = Field(..., description="True if asking about competitors or market players.")
     is_market_size_question: bool = Field(..., description="True if asking about market size, growth, CAGR.")
+    has_physical_location: bool = Field(..., description="True if this business operates from a physical location customers visit (restaurant, gym, clinic, store). False if it is a digital product, app, platform, or online service.")
+    search_query: str = Field(..., description=(
+        "The optimal web search query to find relevant competitors or market data for this specific question. "
+        "Think carefully: what search query would a researcher actually type to find LOCAL or REGIONAL results "
+        "rather than global ones? If the business is local, include local language terms, local brand names, "
+        "or qualifiers like 'local', 'Arab', 'Egyptian', 'alternative to X in Y' that surface local results. "
+        "The query must be specific enough to avoid global SEO dominance by international brands."
+    ))
+
+    @validator('is_competitor_question', 'is_market_size_question', 'has_physical_location', pre=True)
+    def coerce_bool(cls, v):
+        if isinstance(v, str):
+            return v.lower() in ('true', '1', 'yes')
+        return v
 
 
 class DistilledInsightsOutput(BaseModel):
@@ -52,13 +66,24 @@ async def _try_with_cerebras(coro_fn, *args, **kwargs):
 
 
 async def extract_idea_context(idea: str, question: str) -> IdeaContext:
+    import json
     messages = [
         {
             "role": "system",
             "content": (
                 "You are a business analyst. Extract structured context from a business idea and research question. "
-                "For location: extract the city or country only if explicitly mentioned. "
-                "If no location is mentioned, set location to null — never invent a location."
+                "Return ONLY a valid JSON object with these exact fields:\n"
+                '{"category": string, "location": string or null, '
+                '"is_competitor_question": true or false, '
+                '"is_market_size_question": true or false, '
+                '"has_physical_location": true or false, '
+                '"search_query": string}\n'
+                "For location: extract city/country only if explicitly mentioned, else null.\n"
+                "For has_physical_location: true only if customers physically visit "
+                "(restaurant, gym, clinic, store). False for any app, platform, or online service.\n"
+                "For search_query: write a query that finds LOCAL/REGIONAL results, "
+                "not global SEO-dominant brands. Include local language terms if relevant.\n"
+                "Return ONLY the JSON. No explanation, no markdown."
             )
         },
         {
@@ -68,8 +93,10 @@ async def extract_idea_context(idea: str, question: str) -> IdeaContext:
     ]
 
     async def run(active_llm):
-        structured = active_llm.with_structured_output(IdeaContext)
-        return await structured.ainvoke(messages)
+        response = await active_llm.ainvoke(messages)
+        raw = response.content.replace("```json", "").replace("```", "").strip()
+        data = json.loads(raw)
+        return IdeaContext(**data)
 
     llm = get_primary_llm()
     try:
@@ -78,8 +105,7 @@ async def extract_idea_context(idea: str, question: str) -> IdeaContext:
         if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
             logger.warning("Context extraction: primary LLM rate limited. Switching to fallback.")
             try:
-                fallback = get_fallback_llm()
-                return await run(fallback)
+                return await run(get_fallback_llm())
             except RateLimitError as e2:
                 if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
                     logger.warning("Context extraction: both Groq keys exhausted. Switching to Cerebras.")
@@ -107,28 +133,32 @@ async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[st
         raise KeyError("LLM dependency missing from graph configuration.")
 
     context = await extract_idea_context(idea=idea, question=target_question)
-    logger.info(f"Extracted context — category: '{context.category}', location: '{context.location}', competitor_q: {context.is_competitor_question}, market_size_q: {context.is_market_size_question}")
+    logger.info(
+        f"Extracted context — category: '{context.category}', location: '{context.location}', "
+        f"competitor_q: {context.is_competitor_question}, market_size_q: {context.is_market_size_question}, "
+        f"physical: {context.has_physical_location}"
+    )
 
     if context.is_competitor_question and context.location:
-        logger.info(f"Routing to Google Places: '{context.category}' in '{context.location}'")
-        raw_search_dump = await find_local_competitors(
-            category=context.category,
-            location=context.location
-        )
+        if context.has_physical_location:
+            logger.info(f"Routing to Google Places: '{context.category}' in '{context.location}'")
+            raw_search_dump = await find_local_competitors(
+                category=context.category,
+                location=context.location
+            )
+        else:
+            logger.info(f"Routing to Tavily web search with LLM-generated query: '{context.search_query}'")
+            search_tool = MarketSearchTool()
+            raw_search_dump = await search_tool.run_async(query=context.search_query)
+
     elif context.is_market_size_question:
-        logger.info("Routing to market report tool.")
+        logger.info(f"Routing to market report tool with LLM-generated query: '{context.search_query}'")
         report_tool = MarketReportTool()
-        location_str = context.location or ""
-        raw_search_dump = await report_tool.search(
-            query=f"{context.category} market size growth {location_str}".strip()
-        )
+        raw_search_dump = await report_tool.search(query=context.search_query)
     else:
-        logger.info("Routing to general Tavily search.")
+        logger.info(f"Routing to general Tavily search with LLM-generated query: '{context.search_query}'")
         search_tool = MarketSearchTool()
-        location_str = context.location or ""
-        raw_search_dump = await search_tool.run_async(
-            query=f"{context.category} {location_str} {target_question}".strip()
-        )
+        raw_search_dump = await search_tool.run_async(query=context.search_query)
 
     messages = [
         {"role": "system", "content": RESEARCH_EXTRACTOR_SYSTEM_PROMPT},

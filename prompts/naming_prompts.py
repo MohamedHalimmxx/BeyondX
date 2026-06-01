@@ -27,11 +27,17 @@ No exceptions.
 
 YOUR PROCESS:
 1. Read the non-negotiable first. State it explicitly.
-2. Ask: what words, feelings, images, or concepts does this promise evoke?
-3. Generate 15 name candidates that start from those words, feelings, or concepts
-4. Score each on non-negotiable alignment and memorability
-5. Reject those scoring 0-1 on alignment
-6. Return top 10 ranked by overall score"""
+2. Describe in 2 sentences the emotional experience of the target customer —
+   what do they feel BEFORE finding this brand, and what do they feel AFTER?
+   This emotional story is your naming brief. Generate names from this feeling,
+   not from the brief's keywords or geographic references.
+3. Ask: what words, feelings, images, or concepts does this emotional story evoke?
+4. Generate 15 name candidates that emerge from those feelings and concepts.
+   Do not default to geographic names, category descriptions, or obvious compound words.
+   Reach for the emotional truth of the brand.
+5. Score each on non-negotiable alignment and memorability
+6. Reject those scoring 0-1 on alignment
+7. Return top 10 ranked by overall score"""
 
 NAMING_HUMAN_TEMPLATE = """Generate brand name candidates for this business.
 
@@ -51,5 +57,6 @@ NAMING_HUMAN_TEMPLATE = """Generate brand name candidates for this business.
 {non_negotiable}
 
 Start by stating what the non-negotiable means and what it evokes.
-Then generate 15 candidates from that starting point.
+Then describe the emotional before/after of the target customer in 2 sentences.
+Then generate 15 candidates from that emotional story.
 Score each, reject failures, return top 10."""

@@ -6,19 +6,21 @@ import json
 from typing import cast
 from langchain_core.language_models.chat_models import BaseChatModel
 from groq import RateLimitError
+from openai import RateLimitError as CerebrasRateLimitError
 
 from state.naming_state import BrandNamingOutput
 from prompts.naming_prompts import NAMING_SYSTEM_PROMPT, NAMING_HUMAN_TEMPLATE
-from config.llm_factory import get_fallback_llm, get_primary_llm
+from config.llm_factory import get_fallback_llm
 
 logger = logging.getLogger("research_agent.nodes.naming_node")
 
+ALL_EXHAUSTED_MSG = (
+    "\n\n⚠️  All LLM providers exhausted (Groq key 1, Groq key 2, Cerebras).\n"
+    "   Please wait a few minutes and run again.\n"
+)
+
 
 async def check_domain(name: str) -> dict:
-    """
-    Checks domain availability using DNS lookup.
-    No paid API required.
-    """
     import socket
     result = {"com": "unknown", "io": "unknown"}
     name_clean = name.lower().replace(" ", "").replace("-", "")
@@ -34,22 +36,9 @@ async def check_domain(name: str) -> dict:
     return result
 
 
-async def validate_brand_conflicts(
-    candidates: list,
-    llm: BaseChatModel
-) -> dict:
-    """
-    Uses LLM knowledge to check if any candidate name is already
-    a well-known brand, celebrity, product, or cultural figure.
-
-    Step 1: LLM knowledge check for all names in one call.
-    Step 2: Tavily search for names flagged as uncertain.
-
-    Returns dict: {name: {"status": "conflict/clear/unknown", "reason": "..."}}
-    """
+async def validate_brand_conflicts(candidates: list, llm: BaseChatModel) -> dict:
     name_list = [c.name for c in candidates]
 
-    # Step 1 — LLM knowledge check
     messages = [
         {
             "role": "system",
@@ -76,9 +65,7 @@ async def validate_brand_conflicts(
 
     try:
         response = await llm.ainvoke(messages)
-        raw = response.content
-        # Clean markdown fences if present
-        raw = raw.replace("```json", "").replace("```", "").strip()
+        raw = response.content.replace("```json", "").replace("```", "").strip()
         data = json.loads(raw)
         results = {r["name"]: {"status": r["status"], "reason": r.get("reason", "")}
                    for r in data.get("results", [])}
@@ -86,7 +73,6 @@ async def validate_brand_conflicts(
         logger.warning(f"LLM conflict check failed: {str(e)}. Marking all as unknown.")
         results = {name: {"status": "unknown", "reason": ""} for name in name_list}
 
-    # Step 2 — Tavily search for uncertain names
     uncertain_names = [name for name in name_list
                        if results.get(name, {}).get("status") == "unknown"]
 
@@ -100,7 +86,6 @@ async def validate_brand_conflicts(
                 search_results = await search_tool.run_async(
                     query=f'"{name}" brand company product trademark'
                 )
-                # Ask LLM to interpret the search results
                 verify_messages = [
                     {
                         "role": "system",
@@ -113,10 +98,7 @@ async def validate_brand_conflicts(
                     },
                     {
                         "role": "user",
-                        "content": (
-                            f"Name to check: {name}\n\n"
-                            f"Search results:\n{search_results[:2000]}"
-                        )
+                        "content": f"Name to check: {name}\n\nSearch results:\n{search_results[:2000]}"
                     }
                 ]
                 verify_response = await llm.ainvoke(verify_messages)
@@ -145,7 +127,6 @@ async def generate_brand_names(
     non_negotiable: str,
     llm: BaseChatModel
 ) -> BrandNamingOutput:
-    structured_llm = llm.with_structured_output(BrandNamingOutput)
     messages = [
         {"role": "system", "content": NAMING_SYSTEM_PROMPT},
         {"role": "user", "content": NAMING_HUMAN_TEMPLATE.format(
@@ -156,33 +137,59 @@ async def generate_brand_names(
             non_negotiable=non_negotiable
         )}
     ]
-    try:
+
+    async def try_groq(active_llm):
+        structured_llm = active_llm.with_structured_output(BrandNamingOutput)
         return cast(BrandNamingOutput, await structured_llm.ainvoke(messages))
-    except RateLimitError as e:
-        if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
-            logger.warning("Naming Node: rate limited. Switching to fallback.")
-            fallback = get_fallback_llm(temperature=0.7)
+
+    async def try_cerebras():
+        from config.llm_factory import get_cerebras_llm
+        cerebras = get_cerebras_llm(temperature=0.7)
+        json_messages = [
+            {
+                "role": "system",
+                "content": NAMING_SYSTEM_PROMPT + (
+                    "\n\nIMPORTANT: Return ONLY valid JSON matching this exact schema, "
+                    "no markdown, no explanation:\n"
+                    '{"candidates": [...], "top_recommendation": "...", '
+                    '"naming_strategy": "...", "names_to_avoid": []}'
+                )
+            },
+            messages[1]
+        ]
+        for attempt in range(3):
             try:
-                structured_fallback = fallback.with_structured_output(BrandNamingOutput)
-                return cast(BrandNamingOutput, await structured_fallback.ainvoke(messages))
-            except RateLimitError as e2:
-                if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
-                    logger.warning("Naming Node: both Groq keys exhausted. Switching to Cerebras.")
-                    from config.llm_factory import get_cerebras_llm
-                    from openai import RateLimitError as CerebrasRateLimitError
-                    import asyncio
-                    cerebras = get_cerebras_llm(temperature=0.7)
-                    try:
-                        structured_cerebras = cerebras.with_structured_output(BrandNamingOutput)
-                        return cast(BrandNamingOutput, await structured_cerebras.ainvoke(messages))
-                    except CerebrasRateLimitError:
-                        logger.warning("Cerebras queue full. Retrying in 5s.")
-                        await asyncio.sleep(5)
-                        structured_cerebras = cerebras.with_structured_output(BrandNamingOutput)
-                        return cast(BrandNamingOutput, await structured_cerebras.ainvoke(messages))
-                else:
-                    raise
-        raise
+                response = await cerebras.ainvoke(json_messages)
+                raw = response.content.replace("```json", "").replace("```", "").strip()
+                data = json.loads(raw)
+                return BrandNamingOutput(**data)
+            except CerebrasRateLimitError:
+                wait = (attempt + 1) * 15
+                logger.warning(f"Cerebras queue full. Retrying in {wait}s (attempt {attempt+1}/3).")
+                await asyncio.sleep(wait)
+            except Exception as parse_err:
+                logger.warning(f"Cerebras naming parse failed: {parse_err}. Retrying.")
+                await asyncio.sleep(10)
+        raise RuntimeError(ALL_EXHAUSTED_MSG)
+
+    # Groq key 1
+    try:
+        return await try_groq(llm)
+    except RateLimitError as e:
+        if "tokens per day" not in str(e) and "rate_limit_exceeded" not in str(e):
+            raise
+
+    # Groq key 2
+    logger.warning("Naming Node: rate limited. Switching to fallback.")
+    try:
+        return await try_groq(get_fallback_llm(temperature=0.7))
+    except RateLimitError as e2:
+        if "tokens per day" not in str(e2) and "rate_limit_exceeded" not in str(e2):
+            raise
+
+    # Cerebras
+    logger.warning("Naming Node: both Groq keys exhausted. Switching to Cerebras.")
+    return await try_cerebras()
 
 
 async def naming_node(
@@ -192,13 +199,6 @@ async def naming_node(
     brand_brief,
     llm: BaseChatModel
 ) -> BrandNamingOutput:
-    """
-    Full brand naming pipeline:
-    1. Generate candidates
-    2. Validate brand conflicts (LLM knowledge → Tavily for uncertain)
-    3. Check domain availability
-    4. Return enriched output
-    """
     logger.info("Executing Naming Node: Generating brand name candidates.")
 
     competitor_names = [c.name for c in analysis.competitors] if analysis.competitors else []
@@ -215,18 +215,14 @@ async def naming_node(
 
     logger.info(f"Generated {len(naming_output.candidates)} candidates. Running conflict validation...")
 
-    # Step 2 — Conflict validation + domain check in parallel
     conflict_results = await validate_brand_conflicts(naming_output.candidates, llm)
     domain_tasks = [check_domain(c.name) for c in naming_output.candidates]
     domain_results = await asyncio.gather(*domain_tasks, return_exceptions=True)
 
-    # Enrich candidates
     for i, candidate in enumerate(naming_output.candidates):
-        # Domain
         if isinstance(domain_results[i], dict):
             candidate.domain_com = domain_results[i]["com"]
             candidate.domain_io = domain_results[i]["io"]
-        # Conflict
         conflict = conflict_results.get(candidate.name, {})
         candidate.brand_conflict = conflict.get("status", "unknown")
         candidate.conflict_reason = conflict.get("reason", "")
