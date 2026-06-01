@@ -33,10 +33,31 @@ ENRICHMENT_EXTRACTION_SYSTEM_PROMPT = """You are a brand intelligence analyst.
 You will receive raw data about a competitor — customer reviews and online presence data.
 Extract structured brand intelligence from this raw data.
 
+SCORING RUBRIC — you must use the full 0-10 scale:
+
+Axis 1 (Price Point):
+- 0-3: Clearly budget/street food pricing, very cheap
+- 4-5: Affordable, below average for the category
+- 6-7: Mid-range, average pricing for the category
+- 8-9: Premium, noticeably expensive
+- 10: Luxury, highest price in market
+
+Axis 2 (non-price differentiator):
+- 0-2: Generic, no differentiation, could be any brand
+- 3-4: Slightly differentiated but mostly standard
+- 5-6: Moderately differentiated, some unique elements
+- 7-8: Clearly differentiated, strong identity
+- 9-10: Highly unique, category-defining
+
+IMPORTANT: Competitors MUST receive different scores if their evidence differs.
+If one competitor has "amazing authentic homemade recipes" and another has
+"standard fast food taste", they cannot both score 8 on authenticity.
+Use the evidence to justify score differences between competitors.
+
 STRICT RULES:
 - Only extract signals explicitly present in the data
 - Quote directly from reviews when identifying strengths and weaknesses
-- If a signal is not in the data, use an empty list [] for list fields — never use a string where a list is expected
+- If a signal is not in the data, use an empty list [] for list fields
 - Pricing tier must come from actual price mentions or strong signals in the data
 - Target audience must come from who is mentioned in reviews or marketing language
 - Data confidence: high if 3+ strong signals, medium if 1-2 signals, low if mostly inferred"""
@@ -53,6 +74,8 @@ Raw customer reviews:
 Online presence data:
 {online_data}
 
+Score this competitor using the full 0-10 scale.
+Justify each score with specific evidence from the data above.
 Extract the competitor profile:"""
 
 SYNTHESIS_SYSTEM_PROMPT = """You are a principal brand strategist at a top branding agency.

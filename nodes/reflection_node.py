@@ -1,100 +1,87 @@
 import logging
-from typing import Any, cast
+from typing import Any
 from langchain_core.language_models.chat_models import BaseChatModel
 from groq import RateLimitError
+from openai import RateLimitError as CerebrasRateLimitError
+import asyncio
 
-from prompts.research_prompt import REFLECTION_HUMAN_TEMPLATE, REFLECTION_SYSTEM_PROMPT
-from state.research_state import ResearchState, ReflectionVerdict
 from config.llm_factory import get_fallback_llm
+from prompts.research_prompt import REFLECTION_SYSTEM_PROMPT, REFLECTION_HUMAN_TEMPLATE
+from state.research_state import ResearchState, ReflectionVerdict
 
 logger = logging.getLogger("research_agent.nodes.reflection_node")
 
+ALL_EXHAUSTED_MSG = (
+    "\n\n⚠️  All LLM providers are currently rate-limited or overloaded.\n"
+    "   (Groq key 1, Groq key 2, Cerebras)\n"
+    "   Please wait a few minutes and run again.\n"
+)
+
 
 async def reflection_node(state: ResearchState, config: dict[str, Any]) -> dict[str, Any]:
-    """Audits accumulated insights to determine if research loop should continue."""
     logger.info("Executing Reflection Node: Evaluating qualitative research completeness.")
 
-    idea = state.get("idea", "")
-    plan = state.get("research_plan", [])
+    iteration = state.get("iteration", 0)
+    max_iterations = state.get("max_iterations", 5)
+    research_plan = state.get("research_plan", [])
     insights = state.get("insights", [])
-    current_iteration = state.get("iteration", 0)
-    max_iterations = state.get("max_iterations", 3)
 
-    if not plan or not insights:
+    if not insights and not research_plan:
         logger.warning("Empty plan or insights detected. Forcing loop continuation.")
-        return {
-            "reflection_verdict": {
-                "is_complete": False,
-                "reasoning": "Initial data portfolio is empty. Forcing loop continuation.",
-                "next_question": plan[0] if plan else "Identify market dynamics"
-            }
-        }
+        return {"is_complete": False, "reflection_reasoning": "No data yet."}
+
+    if iteration >= max_iterations:
+        logger.warning(f"Iteration limit reached ({iteration}/{max_iterations}). Forcing completion.")
+        return {"is_complete": True, "reflection_reasoning": "Iteration cap hit."}
 
     llm: BaseChatModel | None = config.get("configurable", {}).get("llm")
     if not llm:
-        raise KeyError("Critical dependency missing: 'llm' must be injected into graph configuration context.")
+        raise KeyError("Critical dependency missing: 'llm' not found in runtime config.")
 
     messages = [
         {"role": "system", "content": REFLECTION_SYSTEM_PROMPT},
         {"role": "user", "content": REFLECTION_HUMAN_TEMPLATE.format(
-            idea=idea,
-            plan="\n".join([f"- {q}" for q in plan]),
-            insights="\n".join([f"- {i}" for i in insights]),
-            iteration=current_iteration
+            idea=state.get("idea", ""),
+            plan="\n".join(f"- {q}" for q in research_plan),
+            insights="\n".join(f"- {i}" for i in insights),
+            iteration=iteration
         )}
     ]
 
-    async def invoke(active_llm) -> ReflectionVerdict:
+    async def invoke(active_llm):
         structured = active_llm.with_structured_output(ReflectionVerdict)
-        return cast(ReflectionVerdict, await structured.ainvoke(messages))
+        return await structured.ainvoke(messages)
+
+    async def try_cerebras():
+        from config.llm_factory import get_cerebras_llm
+        cerebras = get_cerebras_llm()
+        for attempt in range(3):
+            try:
+                return await invoke(cerebras)
+            except CerebrasRateLimitError:
+                wait = (attempt + 1) * 15
+                logger.warning(f"Cerebras queue full. Retrying in {wait}s (attempt {attempt+1}/3).")
+                await asyncio.sleep(wait)
+        raise RuntimeError(ALL_EXHAUSTED_MSG)
 
     try:
         verdict = await invoke(llm)
-
     except RateLimitError as e:
         if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
             logger.warning("Reflection Node: primary LLM rate limited. Switching to fallback.")
             try:
-                fallback = get_fallback_llm()
-                verdict = await invoke(fallback)
-            except Exception:
-                logger.warning("Fallback also failed in reflection. Forcing completion to avoid crash.")
-                return {
-                    "reflection_verdict": {
-                        "is_complete": True,
-                        "reasoning": "All LLMs exhausted during reflection. Advancing to synthesis.",
-                        "next_question": None
-                    }
-                }
+                verdict = await invoke(get_fallback_llm())
+            except RateLimitError as e2:
+                if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
+                    logger.warning("Reflection Node: both Groq keys exhausted. Switching to Cerebras.")
+                    verdict = await try_cerebras()
+                else:
+                    raise
         else:
             raise
 
-    except Exception as exc:
-        logger.error(f"Reflection Node error: {str(exc)}", exc_info=True)
-        return {
-            "reflection_verdict": {
-                "is_complete": True,
-                "reasoning": f"Reflection bypassed safely: {str(exc)}",
-                "next_question": None
-            }
-        }
-
     logger.info(f"Reflection complete. Is Complete: {verdict.is_complete}. Reasoning: {verdict.reasoning}")
-
-    if current_iteration >= max_iterations and not verdict.is_complete:
-        logger.warning(f"Iteration limit reached ({current_iteration}/{max_iterations}). Forcing completion.")
-        return {
-            "reflection_verdict": {
-                "is_complete": True,
-                "reasoning": "Iteration cap hit. Advancing to synthesis phase.",
-                "next_question": None
-            }
-        }
-
     return {
-        "reflection_verdict": {
-            "is_complete": verdict.is_complete,
-            "reasoning": verdict.reasoning,
-            "next_question": verdict.next_question
-        }
+        "is_complete": verdict.is_complete,
+        "reflection_reasoning": verdict.reasoning
     }

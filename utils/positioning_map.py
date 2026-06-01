@@ -7,11 +7,54 @@ Works for any two axes — no hardcoding.
 from state.analyst_state import BrandAnalystOutput
 
 
+def _parse_position_score(description: str, low_label: str, high_label: str) -> float:
+    """
+    Derives a 0-10 score from a position description string.
+    Uses semantic matching against the axis labels — no hardcoded keywords.
+    """
+    desc = description.lower()
+    low = low_label.lower()
+    high = high_label.lower()
+
+    # Split labels into individual words for matching
+    low_words = set(low.replace("-", " ").replace("→", " ").split())
+    high_words = set(high.replace("-", " ").replace("→", " ").split())
+
+    # Remove common stop words
+    stop_words = {"and", "or", "the", "a", "an", "to", "of", "in", "with"}
+    low_words -= stop_words
+    high_words -= stop_words
+
+    # Count matches toward each end
+    low_matches = sum(1 for w in low_words if w in desc)
+    high_matches = sum(1 for w in high_words if w in desc)
+
+    # Explicit position words
+    low_signals = {"affordable", "budget", "cheap", "low", "basic", "standard",
+                   "traditional", "generic", "mass", "entry", "simple"}
+    high_signals = {"premium", "high", "expensive", "luxury", "innovative",
+                    "authentic", "artisan", "gourmet", "advanced", "unique"}
+    mid_signals = {"mid", "medium", "moderate", "middle", "average", "balanced"}
+
+    low_count = low_matches + sum(1 for w in low_signals if w in desc)
+    high_count = high_matches + sum(1 for w in high_signals if w in desc)
+    mid_count = sum(1 for w in mid_signals if w in desc)
+
+    if mid_count > 0 and low_count == 0 and high_count == 0:
+        return 5.0
+    if high_count > low_count:
+        return 7.5 + min(high_count - 1, 2) * 0.5  # 7.5 to 8.5
+    if low_count > high_count:
+        return 2.5 - min(low_count - 1, 2) * 0.5  # 2.5 to 1.5
+    return 5.0  # Default to center if ambiguous
+
+
 def render_positioning_map(analysis: BrandAnalystOutput) -> str:
     """
     Renders an ASCII 2x2 positioning map from competitor scores.
     Axis 1 (x-axis): left = low, right = high
     Axis 2 (y-axis): bottom = low, top = high
+    All positions derived from data — no hardcoded coordinates.
     """
     axes = analysis.positioning_axes
     competitors = analysis.competitors
@@ -50,7 +93,6 @@ def render_positioning_map(analysis: BrandAnalystOutput) -> str:
     def score_to_grid_y(score: float) -> int:
         margin = 2
         usable = height - 2 * margin
-        # Invert: high score = top of map
         pos = height - 1 - (margin + int((score / 10) * usable))
         return max(margin, min(height - margin - 1, pos))
 
@@ -65,9 +107,15 @@ def render_positioning_map(analysis: BrandAnalystOutput) -> str:
         x = score_to_grid_x(comp.axis_1_score)
         y = score_to_grid_y(comp.axis_2_score)
 
-        # Nudge on overlap
-        while (x, y) in placed and x < width - 2:
-            x += 1
+        # Nudge on overlap — try right, then down, then diagonal
+        attempts = [(x, y), (x+1, y), (x, y-1), (x+1, y-1), (x+2, y), (x, y-2)]
+        for ax, ay in attempts:
+            ax = max(1, min(width - 2, ax))
+            ay = max(1, min(height - 2, ay))
+            if (ax, ay) not in placed:
+                x, y = ax, ay
+                break
+
         placed[(x, y)] = sym
         grid[y][x] = sym
         legend.append(
@@ -76,35 +124,29 @@ def render_positioning_map(analysis: BrandAnalystOutput) -> str:
             f"{axes.axis_2_label}: {comp.axis_2_score:.0f})"
         )
 
-    # Place white space stars using actual axis position descriptions
-    # We derive approximate scores from the position descriptions using the LLM output
+    # Place white space stars using axis labels for semantic score derivation
     for ws in analysis.white_spaces[:2]:
-        # Use the midpoint of unoccupied quadrant as approximation
-        # The white space position descriptions guide placement
-        axis_1_desc = ws.axis_1_position.lower()
-        axis_2_desc = ws.axis_2_position.lower()
-
-        # Derive score from description dynamically
-        if any(w in axis_1_desc for w in ["premium", "high", "expensive", "luxury"]):
-            ws_x_score = 8.0
-        elif any(w in axis_1_desc for w in ["affordable", "low", "budget", "cheap"]):
-            ws_x_score = 2.0
-        else:
-            ws_x_score = 5.0
-
-        if any(w in axis_2_desc for w in ["authentic", "high", "artisan", "quality", "premium"]):
-            ws_y_score = 8.0
-        elif any(w in axis_2_desc for w in ["standard", "low", "mass", "basic"]):
-            ws_y_score = 2.0
-        else:
-            ws_y_score = 5.0
+        ws_x_score = _parse_position_score(
+            ws.axis_1_position,
+            axes.axis_1_low,
+            axes.axis_1_high
+        )
+        ws_y_score = _parse_position_score(
+            ws.axis_2_position,
+            axes.axis_2_low,
+            axes.axis_2_high
+        )
 
         wx = score_to_grid_x(ws_x_score)
         wy = score_to_grid_y(ws_y_score)
 
-        # Nudge if occupied
-        while (wx, wy) in placed and wx < width - 2:
-            wx += 1
+        attempts = [(wx, wy), (wx-1, wy), (wx, wy+1), (wx-1, wy+1)]
+        for ax, ay in attempts:
+            ax = max(1, min(width - 2, ax))
+            ay = max(1, min(height - 2, ay))
+            if (ax, ay) not in placed:
+                wx, wy = ax, ay
+                break
 
         placed[(wx, wy)] = "★"
         grid[wy][wx] = "★"

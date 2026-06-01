@@ -21,6 +21,10 @@ class AppSettings(BaseSettings):
         default=None,
         description="Google Gemini API key. Used as final fallback when both Groq keys are exhausted."
     )
+    CEREBRAS_API_KEY: Optional[SecretStr] = Field(
+        default=None,
+        description="Cerebras API key. Used as fallback when Groq keys are exhausted."
+    )
 
     # Search + Places
     TAVILY_API_KEY: SecretStr = Field(
@@ -33,6 +37,10 @@ class AppSettings(BaseSettings):
     )
 
     # Model config
+    FAST_LLM_MODEL: str = Field(
+        default="llama-3.1-8b-instant",
+        description="Lightweight model for simple classification tasks — uses 10x fewer tokens."
+    )
     LLM_MODEL: str = Field(
         default="llama-3.3-70b-versatile",
         description="Primary Groq model."

@@ -5,7 +5,9 @@ from dotenv import load_dotenv
 from config.settings import settings
 from agents.research_agent import AutonomousResearchAgent
 from agents.analyst_agent import BrandAnalystAgent
-from agents.strategy_agent import StrategyWriterAgent 
+from agents.strategy_agent import StrategyWriterAgent
+from agents.naming_agent import BrandNamingAgent
+from nodes.naming_node import naming_node
 from nodes.analyst_node import generate_positioning_statement
 from utils.brand_brief import collect_brand_brief
 from utils.positioning_map import render_positioning_map
@@ -33,14 +35,18 @@ async def main() -> None:
             print("Error: Business idea cannot be empty.")
             return
 
-        # Brand Brief Questions — collect before research runs
+        # Brand Brief — location asked FIRST so research uses correct city
         brand_brief = collect_brand_brief(user_idea)
 
-        # Stage 1 — Market Research
+        # Build location-enriched idea for research
+        location_context = f" in {brand_brief.location}" if brand_brief.location != "Not specified" else ""
+        research_idea = f"{user_idea}{location_context}"
+
+        # Stage 1 — Market Research with location context
         print("\n[Stage 1] Running market research...")
         print("(This may take a minute. Please hold.)\n")
         research_agent = AutonomousResearchAgent()
-        research_result = await research_agent.execute_research(idea=user_idea)
+        research_result = await research_agent.execute_research(idea=research_idea)
 
         final_report = research_result.get("final_report", "")
         insights = research_result.get("insights", [])
@@ -50,17 +56,17 @@ async def main() -> None:
         print("=" * 70)
         print(final_report)
 
-        # Stage 2 — Brand Analysis
-        print("\n[Stage 2] Running full brand positioning analysis...")
-        print("(Enriching competitors with real reviews and web data. Please hold.)\n")
-
-        # Enrich idea with client brief answers
+        # Build full enriched idea for analyst + strategy
         enriched_idea = (
-            f"{user_idea}\n"
+            f"{user_idea}{location_context}\n"
             f"Client differentiator: {brand_brief.differentiator}\n"
             f"Ideal customer: {brand_brief.ideal_customer}\n"
             f"Non-negotiable: {brand_brief.non_negotiable}"
         )
+
+        # Stage 2 — Brand Analysis
+        print("\n[Stage 2] Running full brand positioning analysis...")
+        print("(Enriching competitors with real reviews and web data. Please hold.)\n")
 
         analyst = BrandAnalystAgent()
         analysis = await analyst.execute_analysis(
@@ -73,8 +79,7 @@ async def main() -> None:
         print("BRAND POSITIONING ANALYSIS")
         print("=" * 70)
 
-        # Positioning Map — visual first
-        positioning_map_string = render_positioning_map(analysis) # Save map to variable for reuse
+        positioning_map_string = render_positioning_map(analysis)
         print("\n## Competitive Positioning Map")
         print(positioning_map_string)
 
@@ -119,7 +124,6 @@ async def main() -> None:
         print(f"\n## Competitive Advantage")
         print(f"  {analysis.competitive_advantage}")
 
-        # Positioning Statement — bridge to strategy writer
         print("\n[Generating positioning statement...]\n")
         llm = get_primary_llm()
         statement = await generate_positioning_statement(
@@ -139,8 +143,7 @@ async def main() -> None:
         print(f"  Unlike:   {statement.unlike}")
         print(f"  We:       {statement.we}")
 
-
-        # Stage 3 — Strategy Writer Execution Loop
+        # Stage 3 — Strategy Writer
         print("\n" + "=" * 70)
         print("[Stage 3] Compiling custom Go-To-Market strategy playbook...")
         print("(Translating competitor intelligence into dynamic copy hooks. Please hold.)\n")
@@ -157,6 +160,48 @@ async def main() -> None:
         print("STRATEGIC GO-TO-MARKET PLAYBOOK GENERATED")
         print("=" * 70)
         print(strategy_playbook)
+
+        print("\n" + "=" * 70)
+        print("Operation completed successfully.")
+
+        # Stage 4 — Brand Naming
+        print("\n" + "=" * 70)
+        print("[Stage 4] Generating brand name candidates...")
+        print("(Checking domain availability. Please hold.)\n")
+
+        naming_agent = BrandNamingAgent()
+        naming_output = await naming_agent.generate_names(
+            idea=enriched_idea,
+            positioning_statement=statement.full_statement,
+            analysis=analysis,
+            brand_brief=brand_brief
+        )
+
+        print("\n" + "=" * 70)
+        print("BRAND NAMING REPORT")
+        print("=" * 70)
+        print(f"\n  Naming Strategy: {naming_output.naming_strategy}")
+        print(f"\n  Names to Avoid: {', '.join(naming_output.names_to_avoid)}")
+
+        print(f"\n## Brand Name Candidates ({len(naming_output.candidates)} generated)")
+        print(f"  {'#':<3} {'Name':<15} {'Score':<7} {'.com':<10} {'.io':<10} {'Conflict':<12}")
+        print(f"  {'-'*3} {'-'*15} {'-'*7} {'-'*10} {'-'*10} {'-'*12}")
+
+        for i, c in enumerate(naming_output.candidates, 1):
+            com = "✅ free" if c.domain_com == "available" else "❌ taken" if c.domain_com == "taken" else "?"
+            io = "✅ free" if c.domain_io == "available" else "❌ taken" if c.domain_io == "taken" else "?"
+            conflict = "⚠️ conflict" if c.brand_conflict == "conflict" else "✅ clear" if c.brand_conflict == "clear" else "?"
+            print(f"  {i:<3} {c.name:<15} {c.score:<7.1f} {com:<10} {io:<10} {conflict:<12}")
+            if c.brand_conflict == "conflict" and c.conflict_reason:
+                print(f"       ↳ {c.conflict_reason}")
+        print(f"\n## Top Recommendation")
+        print(f"  {naming_output.top_recommendation}")
+
+        print(f"\n## Name Details")
+        for i, c in enumerate(naming_output.candidates[:3], 1):
+            print(f"\n  [{i}] {c.name} — {c.pronunciation_guide}")
+            print(f"      Meaning: {c.meaning_and_origin}")
+            print(f"      Why it fits: {c.positioning_fit}")
 
         print("\n" + "=" * 70)
         print("Operation completed successfully.")

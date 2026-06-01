@@ -3,6 +3,7 @@ import logging
 from typing import cast
 from langchain_core.language_models.chat_models import BaseChatModel
 from groq import RateLimitError
+from openai import RateLimitError as CerebrasRateLimitError
 from pydantic import BaseModel, Field
 
 from prompts.analyst_prompts import (
@@ -20,21 +21,43 @@ logger = logging.getLogger("research_agent.nodes.analyst_node")
 
 MAX_COMPETITORS_TO_ENRICH = 6
 
+ALL_EXHAUSTED_MSG = (
+    "\n\n⚠️  All LLM providers exhausted (Groq key 1, Groq key 2, Cerebras).\n"
+    "   Please wait a few minutes and run again.\n"
+)
+
 
 class CompetitorBasic(BaseModel):
-    """Basic competitor info extracted from research for enrichment."""
     name: str
     rating: float = Field(default=0.0)
     review_count: int = Field(default=0)
     location: str = Field(default="")
     category: str = Field(default="")
 
+    class Config:
+        extra = "ignore"
+
 
 class CompetitorListOutput(BaseModel):
-    """Structured list of competitors extracted from research report."""
     competitors: list[CompetitorBasic]
     location: str = Field(..., description="City or country where competitors operate")
     category: str = Field(..., description="The core business category")
+
+    class Config:
+        extra = "ignore"
+
+
+async def _cerebras_retry(coro_fn, *args, **kwargs):
+    from config.llm_factory import get_cerebras_llm
+    cerebras = get_cerebras_llm(temperature=0.2)
+    for attempt in range(3):
+        try:
+            return await coro_fn(*args, llm=cerebras, **kwargs)
+        except CerebrasRateLimitError:
+            wait = (attempt + 1) * 15
+            logger.warning(f"Cerebras queue full. Retrying in {wait}s (attempt {attempt+1}/3).")
+            await asyncio.sleep(wait)
+    raise RuntimeError(ALL_EXHAUSTED_MSG)
 
 
 async def extract_competitors_from_research(
@@ -102,14 +125,20 @@ async def extract_competitor_profile(
 
 
 async def invoke_with_fallback(coro_fn, llm: BaseChatModel, *args, **kwargs):
-    """Runs an LLM call with automatic fallback on rate limit."""
+    """Groq1 → Groq2 → Cerebras. Raises clearly if all exhausted."""
     try:
         return await coro_fn(*args, llm=llm, **kwargs)
     except RateLimitError as e:
         if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
             logger.warning("Analyst Node: rate limited. Switching to fallback LLM.")
-            fallback = get_fallback_llm(temperature=0.2)
-            return await coro_fn(*args, llm=fallback, **kwargs)
+            try:
+                fallback = get_fallback_llm(temperature=0.2)
+                return await coro_fn(*args, llm=fallback, **kwargs)
+            except RateLimitError as e2:
+                if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
+                    logger.warning("Analyst Node: both Groq keys exhausted. Switching to Cerebras.")
+                    return await _cerebras_retry(coro_fn, *args, **kwargs)
+                raise
         raise
 
 
@@ -118,37 +147,31 @@ async def score_competitor_with_fallback(
     axes: PositioningAxes,
     llm: BaseChatModel
 ) -> CompetitorProfile | None:
-    """
-    Scores a single competitor with full fallback chain:
-    Primary Groq → Fallback Groq → Gemini
-    """
-    # Try primary
+    """Groq1 → Groq2 → Cerebras. Raises clearly if all exhausted."""
     try:
-        return await extract_competitor_profile(
-            enriched_data=enriched,
-            axes=axes,
-            llm=llm
-        )
+        return await extract_competitor_profile(enriched_data=enriched, axes=axes, llm=llm)
     except RateLimitError as e:
         if "tokens per day" not in str(e) and "rate_limit_exceeded" not in str(e):
             raise
 
-    # Try fallback (Groq key 2 or Gemini)
     logger.warning(f"Primary exhausted for {enriched['name']}. Trying fallback.")
     try:
         fallback = get_fallback_llm(temperature=0.2)
-        return await extract_competitor_profile(
-            enriched_data=enriched,
-            axes=axes,
-            llm=fallback
-        )
-    except RateLimitError as e:
-        if "tokens per day" not in str(e) and "rate_limit_exceeded" not in str(e):
-            raise
-
-    # Both Groq keys exhausted — this should not happen with a fresh key
-    logger.error(f"All keys exhausted for {enriched['name']}. Skipping.")
-    return None
+        return await extract_competitor_profile(enriched_data=enriched, axes=axes, llm=fallback)
+    except RateLimitError as e2:
+        if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
+            logger.warning(f"Both Groq keys exhausted for {enriched['name']}. Switching to Cerebras.")
+            from config.llm_factory import get_cerebras_llm
+            cerebras = get_cerebras_llm(temperature=0.2)
+            for attempt in range(3):
+                try:
+                    return await extract_competitor_profile(enriched_data=enriched, axes=axes, llm=cerebras)
+                except CerebrasRateLimitError:
+                    wait = (attempt + 1) * 15
+                    logger.warning(f"Cerebras queue full. Retrying in {wait}s (attempt {attempt+1}/3).")
+                    await asyncio.sleep(wait)
+            raise RuntimeError(ALL_EXHAUSTED_MSG)
+        raise
 
 
 async def analyst_node(
@@ -157,77 +180,46 @@ async def analyst_node(
     insights: list[str],
     llm: BaseChatModel
 ) -> BrandAnalystOutput:
-    """
-    Full brand positioning analysis pipeline.
-
-    Steps:
-    1. Extract competitor list from research
-    2. Derive positioning axes from industry context
-    3. Enrich each competitor with real reviews + web data
-    4. Score each competitor from evidence
-    5. Synthesize white spaces, pain points, and positioning recommendation
-    """
     logger.info("Executing Analyst Node: Starting full brand positioning analysis.")
 
     market_context = "\n".join([f"- {i}" for i in insights[:20]])
 
-    # Step 1 — Extract competitors from research
     logger.info("Step 1: Extracting competitor list from research.")
     competitor_list = await invoke_with_fallback(
-        extract_competitors_from_research,
-        llm,
-        idea=idea,
-        research_report=research_report
+        extract_competitors_from_research, llm,
+        idea=idea, research_report=research_report
     )
     logger.info(f"Found {len(competitor_list.competitors)} competitors. "
                 f"Location: {competitor_list.location}, Category: {competitor_list.category}")
 
-    # Step 2 — Derive positioning axes
     logger.info("Step 2: Deriving positioning axes.")
     axes = await invoke_with_fallback(
-        derive_positioning_axes,
-        llm,
-        idea=idea,
-        market_context=market_context
+        derive_positioning_axes, llm,
+        idea=idea, market_context=market_context
     )
     logger.info(f"Axes: '{axes.axis_1_label}' ({axes.axis_1_low}→{axes.axis_1_high}) "
                 f"× '{axes.axis_2_label}' ({axes.axis_2_low}→{axes.axis_2_high})")
 
-    # Step 3 — Enrich top competitors in parallel
     top_competitors = sorted(
-        competitor_list.competitors,
-        key=lambda c: c.review_count,
-        reverse=True
+        competitor_list.competitors, key=lambda c: c.review_count, reverse=True
     )[:MAX_COMPETITORS_TO_ENRICH]
 
     logger.info(f"Step 3: Enriching {len(top_competitors)} competitors in parallel.")
     enrichment_tasks = [
         enrich_competitor(
-            name=c.name,
-            rating=c.rating,
-            review_count=c.review_count,
-            location=competitor_list.location,
-            category=competitor_list.category
+            name=c.name, rating=c.rating, review_count=c.review_count,
+            location=competitor_list.location, category=competitor_list.category
         )
         for c in top_competitors
     ]
     enriched_data_list = await asyncio.gather(*enrichment_tasks, return_exceptions=True)
-
-    valid_enrichments = [
-        e for e in enriched_data_list
-        if isinstance(e, dict)
-    ]
+    valid_enrichments = [e for e in enriched_data_list if isinstance(e, dict)]
     logger.info(f"Successfully enriched {len(valid_enrichments)}/{len(top_competitors)} competitors.")
 
-    # Step 4 — Score each competitor sequentially with full fallback chain
     logger.info("Step 4: Scoring competitors from evidence.")
     profiles = []
     for enriched in valid_enrichments:
-        profile = await score_competitor_with_fallback(
-            enriched=enriched,
-            axes=axes,
-            llm=llm
-        )
+        profile = await score_competitor_with_fallback(enriched=enriched, axes=axes, llm=llm)
         if profile:
             profiles.append(profile)
             logger.info(f"Scored: {profile.name} — "
@@ -235,7 +227,6 @@ async def analyst_node(
                         f"Confidence: {profile.data_confidence}")
         await asyncio.sleep(1)
 
-    # Step 5 — Synthesize final output
     logger.info("Step 5: Synthesizing white spaces, pain points, and positioning.")
 
     competitor_profiles_text = "\n\n".join([
@@ -275,8 +266,25 @@ async def analyst_node(
     except RateLimitError as e:
         if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
             logger.warning("Synthesis: rate limited. Switching to fallback.")
-            fallback = get_fallback_llm(temperature=0.2)
-            result = await run_synthesis(fallback)
+            try:
+                result = await run_synthesis(get_fallback_llm(temperature=0.2))
+            except RateLimitError as e2:
+                if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
+                    logger.warning("Synthesis: both Groq keys exhausted. Switching to Cerebras.")
+                    from config.llm_factory import get_cerebras_llm
+                    cerebras = get_cerebras_llm(temperature=0.2)
+                    for attempt in range(3):
+                        try:
+                            result = await run_synthesis(cerebras)
+                            break
+                        except CerebrasRateLimitError:
+                            wait = (attempt + 1) * 15
+                            logger.warning(f"Cerebras queue full. Retrying in {wait}s (attempt {attempt+1}/3).")
+                            await asyncio.sleep(wait)
+                    else:
+                        raise RuntimeError(ALL_EXHAUSTED_MSG)
+                else:
+                    raise
         else:
             raise
 
@@ -297,13 +305,7 @@ async def generate_positioning_statement(
     analysis: BrandAnalystOutput,
     llm: BaseChatModel
 ) -> "PositioningStatement":
-    """
-    Generates a structured positioning statement from the white space
-    and pain point analysis. Bridges analyst output to strategy writer.
-    """
     from state.analyst_state import PositioningStatement
-
-    structured_llm = llm.with_structured_output(PositioningStatement)
 
     white_space = analysis.white_spaces[0] if analysis.white_spaces else None
     pain_point = analysis.pain_points[0] if analysis.pain_points else None
@@ -335,11 +337,29 @@ async def generate_positioning_statement(
         }
     ]
 
+    async def run(active_llm):
+        structured = active_llm.with_structured_output(PositioningStatement)
+        return cast(PositioningStatement, await structured.ainvoke(messages))
+
     try:
-        return cast(PositioningStatement, await structured_llm.ainvoke(messages))
+        return await run(llm)
     except RateLimitError as e:
         if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
-            fallback = get_fallback_llm(temperature=0.2)
-            structured_fallback = fallback.with_structured_output(PositioningStatement)
-            return cast(PositioningStatement, await structured_fallback.ainvoke(messages))
+            logger.warning("Positioning statement: rate limited. Switching to fallback.")
+            try:
+                return await run(get_fallback_llm(temperature=0.2))
+            except RateLimitError as e2:
+                if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
+                    logger.warning("Positioning statement: both Groq keys exhausted. Switching to Cerebras.")
+                    from config.llm_factory import get_cerebras_llm
+                    cerebras = get_cerebras_llm(temperature=0.2)
+                    for attempt in range(3):
+                        try:
+                            return await run(cerebras)
+                        except CerebrasRateLimitError:
+                            wait = (attempt + 1) * 15
+                            logger.warning(f"Cerebras queue full. Retrying in {wait}s (attempt {attempt+1}/3).")
+                            await asyncio.sleep(wait)
+                    raise RuntimeError(ALL_EXHAUSTED_MSG)
+                raise
         raise
