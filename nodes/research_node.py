@@ -95,6 +95,12 @@ async def extract_idea_context(idea: str, question: str) -> IdeaContext:
     async def run(active_llm):
         response = await active_llm.ainvoke(messages)
         raw = response.content.replace("```json", "").replace("```", "").strip()
+        # Find the first { and last } to extract just the JSON object
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start == -1 or end == 0:
+            raise ValueError(f"No JSON object found in response: {raw[:100]}")
+        raw = raw[start:end]
         data = json.loads(raw)
         return IdeaContext(**data)
 

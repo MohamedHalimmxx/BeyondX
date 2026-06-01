@@ -48,7 +48,8 @@ async def main() -> None:
         research_agent = AutonomousResearchAgent()
         research_result = await research_agent.execute_research(idea=research_idea)
 
-        final_report = research_result.get("final_report", "")
+        final_report = research_result.get("report", research_result.get("final_report", ""))
+        gathered_data = research_result.get("gathered_data", [])
         insights = research_result.get("insights", [])
 
         print("\n" + "=" * 70)
@@ -69,10 +70,13 @@ async def main() -> None:
         print("(Enriching competitors with real reviews and web data. Please hold.)\n")
 
         analyst = BrandAnalystAgent()
+        research_report = final_report if final_report else "\n".join(gathered_data)
+        if len(research_report) > 4000:
+            research_report = research_report[:4000] + "\n[... truncated ...]"
         analysis = await analyst.execute_analysis(
             idea=enriched_idea,
-            research_report=final_report,
-            insights=insights
+            research_report=research_report,
+            insights=insights[:20]
         )
 
         print("\n" + "=" * 70)

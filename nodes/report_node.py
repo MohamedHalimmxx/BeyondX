@@ -26,15 +26,20 @@ async def report_node(state: ResearchState, config: dict[str, Any]) -> dict[str,
         raise KeyError("Critical dependency missing: 'llm' not found in runtime config.")
 
     idea = state.get("idea", "")
-    insights = state.get("insights", [])
+    insights = state.get("insights", [])[:30]  # cap at 30 insights
     gathered_data = state.get("gathered_data", [])
+
+    # Truncate raw data to avoid exceeding Groq's 12k TPM context limit
+    raw_data_text = "\n\n".join(gathered_data)
+    if len(raw_data_text) > 6000:
+        raw_data_text = raw_data_text[:6000] + "\n[... truncated for context limit ...]"
 
     messages = [
         {"role": "system", "content": REPORT_SYNTHESIS_SYSTEM_PROMPT},
         {"role": "user", "content": REPORT_SYNTHESIS_HUMAN_TEMPLATE.format(
             idea=idea,
             insights="\n".join(f"- {i}" for i in insights),
-            raw_data="\n\n".join(gathered_data)
+            raw_data=raw_data_text
         )}
     ]
 
