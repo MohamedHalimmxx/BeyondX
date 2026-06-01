@@ -162,6 +162,18 @@ async def generate_brand_names(
                 response = await cerebras.ainvoke(json_messages)
                 raw = response.content.replace("```json", "").replace("```", "").strip()
                 data = json.loads(raw)
+                # Cerebras uses different field names — normalize
+                for c in data.get("candidates", []):
+                    if "overall_score" in c and "score" not in c:
+                        c["score"] = c.pop("overall_score")
+                    c.setdefault("pronunciation_guide", "")
+                    c.setdefault("meaning_and_origin", "")
+                    c.setdefault("positioning_fit", "")
+                    c.setdefault("rhetorical_device", "")
+                    c.setdefault("domain_com", "unknown")
+                    c.setdefault("domain_io", "unknown")
+                    c.setdefault("brand_conflict", "unknown")
+                    c.setdefault("conflict_reason", "")
                 return BrandNamingOutput(**data)
             except CerebrasRateLimitError:
                 wait = (attempt + 1) * 15

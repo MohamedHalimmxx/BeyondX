@@ -112,7 +112,8 @@ async def enrich_competitor(
     rating: float,
     review_count: int,
     location: str,
-    category: str
+    category: str,
+    has_physical_location: bool = True
 ) -> dict:
     """
     Enriches a single competitor with real data from Google Places reviews
@@ -122,10 +123,25 @@ async def enrich_competitor(
     """
     logger.info(f"Enriching competitor: {name}")
 
-    reviews_data = await get_place_reviews(
+    if has_physical_location:
+        reviews_data = await get_place_reviews(
         place_name=name,
         location=location
     )
+    # If Google Places found nothing, use Tavily web search instead
+    if "No Google Places data" in reviews_data or "No reviews found" in reviews_data:
+        logger.info(f"No Places data for {name} — falling back to Tavily web search.")
+        reviews_data = await search_competitor_online(
+            competitor_name=name,
+            location=location,
+            category=category
+        )
+    else:
+        reviews_data = await search_competitor_online(
+            competitor_name=name,
+            location=location,
+            category=category
+        )
 
     online_data = await search_competitor_online(
         competitor_name=name,
