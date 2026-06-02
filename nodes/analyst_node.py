@@ -1,30 +1,33 @@
+"""Brand Analyst Node — competitive positioning analysis."""
+
 import asyncio
 import logging
 from typing import cast
 from langchain_core.language_models.chat_models import BaseChatModel
-from groq import RateLimitError
-from openai import RateLimitError as CerebrasRateLimitError
 from pydantic import BaseModel, Field
 
 from prompts.analyst_prompts import (
     AXES_SYSTEM_PROMPT, AXES_HUMAN_TEMPLATE,
     ENRICHMENT_EXTRACTION_SYSTEM_PROMPT, ENRICHMENT_EXTRACTION_HUMAN_TEMPLATE,
-    SYNTHESIS_SYSTEM_PROMPT, SYNTHESIS_HUMAN_TEMPLATE
+    SYNTHESIS_SYSTEM_PROMPT, SYNTHESIS_HUMAN_TEMPLATE,
 )
-from state.analyst_state import (
-    BrandAnalystOutput, CompetitorProfile, PositioningAxes
-)
+from state.analyst_state import BrandAnalystOutput, CompetitorProfile, PositioningAxes, PositioningStatement
 from tools.competitor_enricher import enrich_competitor
-from config.llm_factory import get_fallback_llm
+from utils.llm_utils import invoke_with_fallback
 
 logger = logging.getLogger("research_agent.nodes.analyst_node")
 
 MAX_COMPETITORS_TO_ENRICH = 6
 
-ALL_EXHAUSTED_MSG = (
-    "\n\n⚠️  All LLM providers exhausted (Groq key 1, Groq key 2, Cerebras).\n"
-    "   Please wait a few minutes and run again.\n"
-)
+_DIGITAL_CATEGORIES = {
+    "saas", "software", "app", "platform", "digital", "online",
+    "healthcare", "edtech", "fintech", "marketplace",
+}
+
+
+def _is_physical(category: str) -> bool:
+    """Determine if competitors are physical businesses needing Places lookup."""
+    return not any(kw in category.lower() for kw in _DIGITAL_CATEGORIES)
 
 
 class CompetitorBasic(BaseModel):
@@ -40,32 +43,15 @@ class CompetitorBasic(BaseModel):
 
 class CompetitorListOutput(BaseModel):
     competitors: list[CompetitorBasic]
-    location: str = Field(..., description="City or country where competitors operate")
-    category: str = Field(..., description="The core business category")
+    location: str
+    category: str
 
     class Config:
         extra = "ignore"
 
 
-async def _cerebras_retry(coro_fn, *args, **kwargs):
-    from config.llm_factory import get_cerebras_llm
-    cerebras = get_cerebras_llm(temperature=0.2)
-    for attempt in range(3):
-        try:
-            return await coro_fn(*args, llm=cerebras, **kwargs)
-        except CerebrasRateLimitError:
-            wait = (attempt + 1) * 15
-            logger.warning(f"Cerebras queue full. Retrying in {wait}s (attempt {attempt+1}/3).")
-            await asyncio.sleep(wait)
-    raise RuntimeError(ALL_EXHAUSTED_MSG)
-
-
-async def extract_competitors_from_research(
-    idea: str,
-    research_report: str,
-    llm: BaseChatModel
-) -> CompetitorListOutput:
-    structured_llm = llm.with_structured_output(CompetitorListOutput)
+async def _extract_competitors(llm, idea: str, research_report: str) -> CompetitorListOutput:
+    structured = llm.with_structured_output(CompetitorListOutput)
     messages = [
         {
             "role": "system",
@@ -73,38 +59,24 @@ async def extract_competitors_from_research(
                 "Extract the list of competitors mentioned in this market research report. "
                 "Include their names, ratings, and review counts where available. "
                 "Also identify the location and business category from the context."
-            )
+            ),
         },
-        {
-            "role": "user",
-            "content": f"Business idea: {idea}\n\nResearch report:\n{research_report}"
-        }
+        {"role": "user", "content": f"Business idea: {idea}\n\nResearch report:\n{research_report}"},
     ]
-    return cast(CompetitorListOutput, await structured_llm.ainvoke(messages))
+    return cast(CompetitorListOutput, await structured.ainvoke(messages))
 
 
-async def derive_positioning_axes(
-    idea: str,
-    market_context: str,
-    llm: BaseChatModel
-) -> PositioningAxes:
-    structured_llm = llm.with_structured_output(PositioningAxes)
+async def _derive_axes(llm, idea: str, market_context: str) -> PositioningAxes:
+    structured = llm.with_structured_output(PositioningAxes)
     messages = [
         {"role": "system", "content": AXES_SYSTEM_PROMPT},
-        {"role": "user", "content": AXES_HUMAN_TEMPLATE.format(
-            idea=idea,
-            market_context=market_context
-        )}
+        {"role": "user", "content": AXES_HUMAN_TEMPLATE.format(idea=idea, market_context=market_context)},
     ]
-    return cast(PositioningAxes, await structured_llm.ainvoke(messages))
+    return cast(PositioningAxes, await structured.ainvoke(messages))
 
 
-async def extract_competitor_profile(
-    enriched_data: dict,
-    axes: PositioningAxes,
-    llm: BaseChatModel
-) -> CompetitorProfile:
-    structured_llm = llm.with_structured_output(CompetitorProfile)
+async def _score_competitor(llm, enriched_data: dict, axes: PositioningAxes) -> CompetitorProfile:
+    structured = llm.with_structured_output(CompetitorProfile)
     messages = [
         {"role": "system", "content": ENRICHMENT_EXTRACTION_SYSTEM_PROMPT},
         {"role": "user", "content": ENRICHMENT_EXTRACTION_HUMAN_TEMPLATE.format(
@@ -118,87 +90,89 @@ async def extract_competitor_profile(
             axis_2_low=axes.axis_2_low,
             axis_2_high=axes.axis_2_high,
             reviews_data=enriched_data["reviews_data"],
-            online_data=enriched_data["online_data"]
-        )}
+            online_data=enriched_data["online_data"],
+            data_note=enriched_data.get("data_note", ""),
+        )},
     ]
-    return cast(CompetitorProfile, await structured_llm.ainvoke(messages))
+    return cast(CompetitorProfile, await structured.ainvoke(messages))
 
 
-async def invoke_with_fallback(coro_fn, llm: BaseChatModel, *args, **kwargs):
-    """Groq1 → Groq2 → Cerebras. Raises clearly if all exhausted."""
-    try:
-        return await coro_fn(*args, llm=llm, **kwargs)
-    except RateLimitError as e:
-        if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
-            logger.warning("Analyst Node: rate limited. Switching to fallback LLM.")
-            try:
-                fallback = get_fallback_llm(temperature=0.2)
-                return await coro_fn(*args, llm=fallback, **kwargs)
-            except RateLimitError as e2:
-                if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
-                    logger.warning("Analyst Node: both Groq keys exhausted. Switching to Cerebras.")
-                    return await _cerebras_retry(coro_fn, *args, **kwargs)
-                raise
-        raise
+async def _synthesize(llm, idea: str, axes: PositioningAxes,
+                      competitor_profiles_text: str, market_context: str) -> BrandAnalystOutput:
+    structured = llm.with_structured_output(BrandAnalystOutput)
+    messages = [
+        {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
+        {"role": "user", "content": SYNTHESIS_HUMAN_TEMPLATE.format(
+            idea=idea,
+            axis_1_label=axes.axis_1_label,
+            axis_1_low=axes.axis_1_low,
+            axis_1_high=axes.axis_1_high,
+            axis_2_label=axes.axis_2_label,
+            axis_2_low=axes.axis_2_low,
+            axis_2_high=axes.axis_2_high,
+            competitor_profiles=competitor_profiles_text,
+            market_context=market_context,
+        )},
+    ]
+    return cast(BrandAnalystOutput, await structured.ainvoke(messages))
 
 
-async def score_competitor_with_fallback(
-    enriched: dict,
-    axes: PositioningAxes,
-    llm: BaseChatModel
-) -> CompetitorProfile | None:
-    """Groq1 → Groq2 → Cerebras. Raises clearly if all exhausted."""
-    try:
-        return await extract_competitor_profile(enriched_data=enriched, axes=axes, llm=llm)
-    except RateLimitError as e:
-        if "tokens per day" not in str(e) and "rate_limit_exceeded" not in str(e):
-            raise
+async def _generate_positioning(llm, idea: str, analysis: BrandAnalystOutput) -> PositioningStatement:
+    white_space = analysis.white_spaces[0] if analysis.white_spaces else None
+    pain_point = analysis.pain_points[0] if analysis.pain_points else None
+    top_competitor = analysis.competitors[0] if analysis.competitors else None
 
-    logger.warning(f"Primary exhausted for {enriched['name']}. Trying fallback.")
-    try:
-        fallback = get_fallback_llm(temperature=0.2)
-        return await extract_competitor_profile(enriched_data=enriched, axes=axes, llm=fallback)
-    except RateLimitError as e2:
-        if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
-            logger.warning(f"Both Groq keys exhausted for {enriched['name']}. Switching to Cerebras.")
-            from config.llm_factory import get_cerebras_llm
-            cerebras = get_cerebras_llm(temperature=0.2)
-            for attempt in range(3):
-                try:
-                    return await extract_competitor_profile(enriched_data=enriched, axes=axes, llm=cerebras)
-                except CerebrasRateLimitError:
-                    wait = (attempt + 1) * 15
-                    logger.warning(f"Cerebras queue full. Retrying in {wait}s (attempt {attempt+1}/3).")
-                    await asyncio.sleep(wait)
-            raise RuntimeError(ALL_EXHAUSTED_MSG)
-        raise
+    structured = llm.with_structured_output(PositioningStatement)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a senior brand strategist. "
+                "Write a positioning statement: "
+                "'For [audience] who [need], [Brand] is the [category] that [differentiator]. "
+                "Unlike [competitor], we [proof point].' "
+                "Every field must be specific. The full_statement field must be the complete sentence."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Business idea: {idea}\n\n"
+                f"Target audience: {analysis.target_audience_summary}\n"
+                f"White space: {white_space.description if white_space else 'Not identified'}\n"
+                f"Primary pain point: {pain_point.description if pain_point else 'Not identified'}\n"
+                f"Main competitor: {top_competitor.name if top_competitor else 'existing players'}\n"
+                f"Competitive advantage: {analysis.competitive_advantage}\n\n"
+                "Generate the positioning statement:"
+            ),
+        },
+    ]
+    return cast(PositioningStatement, await structured.ainvoke(messages))
 
 
 async def analyst_node(
     idea: str,
     research_report: str,
     insights: list[str],
-    llm: BaseChatModel
+    llm: BaseChatModel,
 ) -> BrandAnalystOutput:
     logger.info("Executing Analyst Node: Starting full brand positioning analysis.")
 
     market_context = "\n".join([f"- {i}" for i in insights[:20]])
 
     logger.info("Step 1: Extracting competitor list from research.")
-    competitor_list = await invoke_with_fallback(
-        extract_competitors_from_research, llm,
-        idea=idea, research_report=research_report
-    )
+    competitor_list = await invoke_with_fallback(_extract_competitors, llm,
+                                                 idea=idea, research_report=research_report)
     logger.info(f"Found {len(competitor_list.competitors)} competitors. "
                 f"Location: {competitor_list.location}, Category: {competitor_list.category}")
 
     logger.info("Step 2: Deriving positioning axes.")
-    axes = await invoke_with_fallback(
-        derive_positioning_axes, llm,
-        idea=idea, market_context=market_context
-    )
+    axes = await invoke_with_fallback(_derive_axes, llm,
+                                      idea=idea, market_context=market_context)
     logger.info(f"Axes: '{axes.axis_1_label}' ({axes.axis_1_low}→{axes.axis_1_high}) "
                 f"× '{axes.axis_2_label}' ({axes.axis_2_low}→{axes.axis_2_high})")
+
+    has_physical = _is_physical(competitor_list.category)
 
     top_competitors = sorted(
         competitor_list.competitors, key=lambda c: c.review_count, reverse=True
@@ -207,8 +181,12 @@ async def analyst_node(
     logger.info(f"Step 3: Enriching {len(top_competitors)} competitors in parallel.")
     enrichment_tasks = [
         enrich_competitor(
-            name=c.name, rating=c.rating, review_count=c.review_count,
-            location=competitor_list.location, category=competitor_list.category
+            name=c.name,
+            rating=c.rating,
+            review_count=c.review_count,
+            location=competitor_list.location,
+            category=competitor_list.category,
+            has_physical_location=has_physical,
         )
         for c in top_competitors
     ]
@@ -219,16 +197,18 @@ async def analyst_node(
     logger.info("Step 4: Scoring competitors from evidence.")
     profiles = []
     for enriched in valid_enrichments:
-        profile = await score_competitor_with_fallback(enriched=enriched, axes=axes, llm=llm)
-        if profile:
-            profiles.append(profile)
-            logger.info(f"Scored: {profile.name} — "
-                        f"Axis1: {profile.axis_1_score}, Axis2: {profile.axis_2_score}, "
-                        f"Confidence: {profile.data_confidence}")
-        await asyncio.sleep(1)
+        try:
+            profile = await invoke_with_fallback(_score_competitor, llm,
+                                                 enriched_data=enriched, axes=axes)
+            if profile:
+                profiles.append(profile)
+                logger.info(f"Scored: {profile.name} — "
+                            f"Axis1: {profile.axis_1_score}, Axis2: {profile.axis_2_score}, "
+                            f"Confidence: {profile.data_confidence}")
+        except Exception as err:
+            logger.error(f"Failed to score {enriched.get('name', '?')}: {err}")
 
     logger.info("Step 5: Synthesizing white spaces, pain points, and positioning.")
-
     competitor_profiles_text = "\n\n".join([
         f"**{p.name}** (Rating: {p.rating}/5, {p.review_count} reviews)\n"
         f"- {axes.axis_1_label}: {p.axis_1_score}/10 ({p.pricing_tier})\n"
@@ -243,123 +223,23 @@ async def analyst_node(
         for p in profiles
     ]) if profiles else "No competitor profiles available."
 
-    async def run_synthesis(active_llm):
-        structured = active_llm.with_structured_output(BrandAnalystOutput)
-        messages = [
-            {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
-            {"role": "user", "content": SYNTHESIS_HUMAN_TEMPLATE.format(
-                idea=idea,
-                axis_1_label=axes.axis_1_label,
-                axis_1_low=axes.axis_1_low,
-                axis_1_high=axes.axis_1_high,
-                axis_2_label=axes.axis_2_label,
-                axis_2_low=axes.axis_2_low,
-                axis_2_high=axes.axis_2_high,
-                competitor_profiles=competitor_profiles_text,
-                market_context=market_context
-            )}
-        ]
-        return cast(BrandAnalystOutput, await structured.ainvoke(messages))
-
-    try:
-        result = await run_synthesis(llm)
-    except RateLimitError as e:
-        if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
-            logger.warning("Synthesis: rate limited. Switching to fallback.")
-            try:
-                result = await run_synthesis(get_fallback_llm(temperature=0.2))
-            except RateLimitError as e2:
-                if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
-                    logger.warning("Synthesis: both Groq keys exhausted. Switching to Cerebras.")
-                    from config.llm_factory import get_cerebras_llm
-                    cerebras = get_cerebras_llm(temperature=0.2)
-                    for attempt in range(3):
-                        try:
-                            result = await run_synthesis(cerebras)
-                            break
-                        except CerebrasRateLimitError:
-                            wait = (attempt + 1) * 15
-                            logger.warning(f"Cerebras queue full. Retrying in {wait}s (attempt {attempt+1}/3).")
-                            await asyncio.sleep(wait)
-                    else:
-                        raise RuntimeError(ALL_EXHAUSTED_MSG)
-                else:
-                    raise
-        else:
-            raise
-
+    result = await invoke_with_fallback(_synthesize, llm,
+                                        idea=idea, axes=axes,
+                                        competitor_profiles_text=competitor_profiles_text,
+                                        market_context=market_context)
     result.positioning_axes = axes
     result.competitors = profiles
 
-    logger.info(
-        f"Analyst Node complete. "
-        f"{len(result.competitors)} competitors profiled, "
-        f"{len(result.white_spaces)} white spaces identified, "
-        f"{len(result.pain_points)} pain points found."
-    )
+    logger.info(f"Analyst Node complete. {len(result.competitors)} competitors profiled, "
+                f"{len(result.white_spaces)} white spaces identified, "
+                f"{len(result.pain_points)} pain points found.")
     return result
 
 
 async def generate_positioning_statement(
     idea: str,
     analysis: BrandAnalystOutput,
-    llm: BaseChatModel
-) -> "PositioningStatement":
-    from state.analyst_state import PositioningStatement
-
-    white_space = analysis.white_spaces[0] if analysis.white_spaces else None
-    pain_point = analysis.pain_points[0] if analysis.pain_points else None
-    top_competitor = analysis.competitors[0] if analysis.competitors else None
-
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a senior brand strategist. "
-                "Write a positioning statement using the classic format: "
-                "'For [audience] who [need], [Brand] is the [category] that [differentiator]. "
-                "Unlike [competitor], we [proof point].' "
-                "Every field must be specific and derived from the analysis data provided. "
-                "No generic statements. The full_statement field must be the complete sentence."
-            )
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Business idea: {idea}\n\n"
-                f"Target audience: {analysis.target_audience_summary}\n"
-                f"White space: {white_space.description if white_space else 'Not identified'}\n"
-                f"Primary pain point: {pain_point.description if pain_point else 'Not identified'}\n"
-                f"Main competitor to differentiate from: {top_competitor.name if top_competitor else 'existing players'}\n"
-                f"Competitive advantage: {analysis.competitive_advantage}\n\n"
-                "Generate the positioning statement:"
-            )
-        }
-    ]
-
-    async def run(active_llm):
-        structured = active_llm.with_structured_output(PositioningStatement)
-        return cast(PositioningStatement, await structured.ainvoke(messages))
-
-    try:
-        return await run(llm)
-    except RateLimitError as e:
-        if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
-            logger.warning("Positioning statement: rate limited. Switching to fallback.")
-            try:
-                return await run(get_fallback_llm(temperature=0.2))
-            except RateLimitError as e2:
-                if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
-                    logger.warning("Positioning statement: both Groq keys exhausted. Switching to Cerebras.")
-                    from config.llm_factory import get_cerebras_llm
-                    cerebras = get_cerebras_llm(temperature=0.2)
-                    for attempt in range(3):
-                        try:
-                            return await run(cerebras)
-                        except CerebrasRateLimitError:
-                            wait = (attempt + 1) * 15
-                            logger.warning(f"Cerebras queue full. Retrying in {wait}s (attempt {attempt+1}/3).")
-                            await asyncio.sleep(wait)
-                    raise RuntimeError(ALL_EXHAUSTED_MSG)
-                raise
-        raise
+    llm: BaseChatModel,
+) -> PositioningStatement:
+    return await invoke_with_fallback(_generate_positioning, llm,
+                                      idea=idea, analysis=analysis)

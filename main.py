@@ -7,13 +7,14 @@ from agents.research_agent import AutonomousResearchAgent
 from agents.analyst_agent import BrandAnalystAgent
 from agents.strategy_agent import StrategyWriterAgent
 from agents.naming_agent import BrandNamingAgent
+from agents.brand_identity_agent import BrandIdentityAgent
+from state.brand_identity_state import BrandIdentityOutput
+from utils.input_validator import validate_brand_brief, BrandBriefValidationError
 from nodes.naming_node import naming_node
 from nodes.analyst_node import generate_positioning_statement
 from utils.brand_brief import collect_brand_brief
 from utils.positioning_map import render_positioning_map
 from config.llm_factory import get_primary_llm
-from agents.brand_identity_agent import BrandIdentityAgent
-from state.brand_identity_state import BrandIdentityOutput
  
 
 load_dotenv()
@@ -40,6 +41,18 @@ async def main() -> None:
 
         # Brand Brief — location asked FIRST so research uses correct city
         brand_brief = collect_brand_brief(user_idea)
+
+        try:
+            validate_brand_brief(
+                idea=user_idea,
+                location=brand_brief.location,
+                differentiator=brand_brief.differentiator,
+                ideal_customer=brand_brief.ideal_customer,
+                non_negotiable=brand_brief.non_negotiable,
+            )
+        except BrandBriefValidationError as e:
+            print(f"\n{e}\n")
+            return
 
         # Build location-enriched idea for research
         location_context = f" in {brand_brief.location}" if brand_brief.location != "Not specified" else ""

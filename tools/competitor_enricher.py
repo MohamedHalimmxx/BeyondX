@@ -1,3 +1,5 @@
+"""Competitor enricher — fetches real reviews and online presence data."""
+
 import logging
 import httpx
 from tavily import AsyncTavilyClient
@@ -5,106 +7,84 @@ from config.settings import settings
 
 logger = logging.getLogger("research_agent.tools.competitor_enricher")
 
-PLACES_REVIEWS_URL = "https://places.googleapis.com/v1/{place_id}"
 PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+PLACES_DETAIL_URL = "https://places.googleapis.com/v1/places/{place_id}"
 
 
-async def get_place_reviews(place_name: str, location: str) -> str:
-    """
-    Fetches real customer reviews for a competitor using Google Places API.
-    Returns raw review text for the LLM to analyze.
-    """
+async def get_place_data(place_name: str, location: str) -> dict:
+    """Fetch rating, review count, and reviews from Google Places."""
     api_key = settings.GOOGLE_PLACES_API_KEY.get_secret_value()
 
-    # First find the place ID
     search_headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": "places.id,places.displayName,places.rating"
+        "X-Goog-FieldMask": "places.id,places.displayName,places.rating,places.userRatingCount",
     }
-    search_body = {
-        "textQuery": f"{place_name} {location}",
-        "maxResultCount": 1
-    }
+    search_body = {"textQuery": f"{place_name} {location}", "maxResultCount": 1}
 
     async with httpx.AsyncClient() as client:
-        search_response = await client.post(
-            PLACES_SEARCH_URL,
-            headers=search_headers,
-            json=search_body
+        search_resp = await client.post(
+            PLACES_SEARCH_URL, headers=search_headers, json=search_body
         )
 
-    places = search_response.json().get("places", [])
+    places = search_resp.json().get("places", [])
     if not places:
-        return f"No Google Places data found for {place_name}."
+        return {"found": False, "rating": 0.0, "review_count": 0, "reviews_text": ""}
 
-    place_id = places[0].get("id", "")
-    if not place_id:
-        return f"Could not retrieve place ID for {place_name}."
+    place = places[0]
+    place_id = place.get("id", "")
+    rating = float(place.get("rating", 0.0))
+    review_count = int(place.get("userRatingCount", 0))
 
-    # Fetch reviews using the place ID
     review_headers = {
         "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": "reviews"
+        "X-Goog-FieldMask": "reviews",
     }
-
     async with httpx.AsyncClient() as client:
-        review_response = await client.get(
-            f"https://places.googleapis.com/v1/places/{place_id}",
-            headers=review_headers
+        detail_resp = await client.get(
+            PLACES_DETAIL_URL.format(place_id=place_id),
+            headers=review_headers,
         )
 
-    review_data = review_response.json()
-    reviews = review_data.get("reviews", [])
-
-    if not reviews:
-        return f"No reviews found for {place_name}."
-
+    reviews = detail_resp.json().get("reviews", [])
     compiled = []
-    for review in reviews[:5]:  # top 5 reviews
-        rating = review.get("rating", "")
-        text = review.get("text", {}).get("text", "")
+    for r in reviews[:5]:
+        r_rating = r.get("rating", "")
+        text = r.get("text", {}).get("text", "")
         if text:
-            compiled.append(f"Rating: {rating}/5 — {text}")
+            compiled.append(f"Rating: {r_rating}/5 — {text}")
 
-    return f"Customer reviews for {place_name}:\n" + "\n\n".join(compiled)
+    return {
+        "found": True,
+        "rating": rating,
+        "review_count": review_count,
+        "reviews_text": "\n\n".join(compiled),
+    }
 
 
-async def search_competitor_online(competitor_name: str, location: str, category: str) -> str:
-    """
-    Searches for online presence, pricing signals, and brand information
-    for a competitor using Tavily.
-    Works for any business type in any location.
-    """
+async def search_competitor_online(
+    competitor_name: str, location: str, category: str
+) -> str:
+    """Tavily web search for pricing signals, brand info, online presence."""
     api_key = settings.TAVILY_API_KEY.get_secret_value()
     client = AsyncTavilyClient(api_key=api_key)
-
     query = f'"{competitor_name}" {location} {category} menu prices reviews brand'
 
     try:
         response = await client.search(
-            query=query,
-            search_depth="basic",
-            max_results=3,
-            include_raw_content=False
+            query=query, search_depth="basic", max_results=3, include_raw_content=False
         )
-
         results = response.get("results", [])
         if not results:
             return f"No online data found for {competitor_name}."
-
-        compiled = []
-        for item in results:
-            url = item.get("url", "")
-            content = item.get("content", "")
-            if content:
-                compiled.append(f"[SOURCE: {url}]\n{content}")
-
+        compiled = [
+            f"[SOURCE: {r.get('url', '')}]\n{r.get('content', '')}"
+            for r in results if r.get("content")
+        ]
         return f"Online presence data for {competitor_name}:\n" + "\n\n---\n\n".join(compiled)
-
     except Exception as exc:
-        logger.error(f"Tavily search failed for {competitor_name}: {str(exc)}")
-        return f"Online search failed for {competitor_name}: {str(exc)}"
+        logger.error(f"Tavily search failed for {competitor_name}: {exc}")
+        return f"Online search failed for {competitor_name}."
 
 
 async def enrich_competitor(
@@ -113,46 +93,51 @@ async def enrich_competitor(
     review_count: int,
     location: str,
     category: str,
-    has_physical_location: bool = True
+    has_physical_location: bool = True,
 ) -> dict:
     """
-    Enriches a single competitor with real data from Google Places reviews
-    and Tavily web search.
-
-    Returns a dict with all enrichment data ready for the analyst LLM.
+    Enrich a competitor with real data.
+    - Physical businesses: Google Places (rating + reviews) + Tavily (online presence)
+    - Digital/SaaS businesses: Tavily only (no Places lookup)
+    Rating and review_count are resolved from Places when available.
     """
     logger.info(f"Enriching competitor: {name}")
 
-    if has_physical_location:
-        reviews_data = await get_place_reviews(
-        place_name=name,
-        location=location
-    )
-    # If Google Places found nothing, use Tavily web search instead
-    if "No Google Places data" in reviews_data or "No reviews found" in reviews_data:
-        logger.info(f"No Places data for {name} — falling back to Tavily web search.")
-        reviews_data = await search_competitor_online(
-            competitor_name=name,
-            location=location,
-            category=category
-        )
-    else:
-        reviews_data = await search_competitor_online(
-            competitor_name=name,
-            location=location,
-            category=category
-        )
+    resolved_rating = rating
+    resolved_review_count = review_count
+    reviews_text = ""
 
-    online_data = await search_competitor_online(
-        competitor_name=name,
-        location=location,
-        category=category
-    )
+    if has_physical_location:
+        place_data = await get_place_data(place_name=name, location=location)
+        if place_data["found"]:
+            resolved_rating = place_data["rating"]
+            resolved_review_count = place_data["review_count"]
+            reviews_text = place_data["reviews_text"]
+            if not reviews_text:
+                logger.info(f"No Places reviews for {name} — supplementing with Tavily.")
+                reviews_text = await search_competitor_online(name, location, category)
+        else:
+            logger.info(f"No Places data for {name} — falling back to Tavily web search.")
+            reviews_text = await search_competitor_online(name, location, category)
+    else:
+        # Digital/SaaS competitor — skip Places entirely
+        reviews_text = await search_competitor_online(name, location, category)
+
+    # Single Tavily call for online presence (separate from reviews)
+    online_data = await search_competitor_online(name, location, category)
+
+    if resolved_review_count == 0 and "No online data" in online_data:
+        data_note = "WARNING: No review data or online data found. Scores based on inference only."
+    elif resolved_review_count == 0:
+        data_note = "NOTE: No Google reviews found. Scores based on web search data only."
+    else:
+        data_note = f"Data from {resolved_review_count} reviews (rating: {resolved_rating}/5)."
 
     return {
         "name": name,
-        "rating": rating,
-        "review_count": review_count,
-        "reviews_data": reviews_data,
-        "online_data": online_data
+        "rating": resolved_rating,
+        "review_count": resolved_review_count,
+        "reviews_data": reviews_text,
+        "online_data": online_data,
+        "data_note": data_note,
     }

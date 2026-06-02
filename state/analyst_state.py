@@ -1,12 +1,9 @@
+"""State and schema definitions for the Brand Analyst Agent."""
 from typing import Optional
 from pydantic import BaseModel, Field
 
 
 class PositioningAxes(BaseModel):
-    """
-    The two most strategically relevant axes for this specific industry.
-    Derived by the LLM from the business context — never hardcoded.
-    """
     axis_1_label: str = Field(..., description="Name of the first axis, e.g. 'Price Point'")
     axis_1_low: str = Field(..., description="Low end label, e.g. 'Budget'")
     axis_1_high: str = Field(..., description="High end label, e.g. 'Premium'")
@@ -17,107 +14,59 @@ class PositioningAxes(BaseModel):
 
 
 class CompetitorProfile(BaseModel):
-    """
-    A fully enriched competitor profile scored from real evidence.
-    Works for any business type — restaurant, gym, SaaS, skincare, clinic, etc.
-    """
     name: str
     rating: float = Field(..., description="Google rating out of 5")
     review_count: int
 
-    # Positioning scores — must be derived from evidence, never guessed
-    axis_1_score: float = Field(..., ge=0, le=10, description="Score on axis 1 based on evidence")
-    axis_2_score: float = Field(..., ge=0, le=10, description="Score on axis 2 based on evidence")
+    axis_1_score: float = Field(..., ge=0, le=10)
+    axis_2_score: float = Field(..., ge=0, le=10)
 
-    # Evidence-based signals extracted from reviews and online data
     pricing_tier: Optional[str] = None
     service_style: Optional[str] = None
-    brand_personality: str = Field(..., description="Their voice and identity — from marketing language and reviews")
-    target_audience: str = Field(..., description="Who actually buys from them — from review demographics and context")
-    distribution_channels: str = Field(..., description="How customers access them — delivery, physical, app, online")
+    brand_personality: str
+    target_audience: str
+    distribution_channels: str
 
-    # Direct from customer language
-    top_strengths: list[str] = Field(default_factory=list, description="What customers consistently praise — quoted from reviews. Empty list if no data available.")
-    top_weaknesses: list[str] = Field(default_factory=list, description="What customers consistently complain about — from reviews. Empty list if no data available.")
+    top_strengths: list[str] = Field(default_factory=list)
+    top_weaknesses: list[str] = Field(default_factory=list)
 
-    # Transparency
-    evidence_summary: str = Field(..., description="Brief summary of what data was used to score this competitor")
-    data_confidence: str = Field(..., description="high / medium / low — based on how much real data was available")
+    evidence_summary: str
+    data_confidence: str = Field(..., description="high / medium / low")
 
 
 class PainPoint(BaseModel):
-    """A strategic customer pain point derived from competitor weakness patterns."""
-    theme: str = Field(..., description="Short label for the pain point")
-    description: str = Field(..., description="What customers are frustrated about across competitors")
-    affected_competitors: list[str] = Field(..., description="Which competitors show this weakness")
-    opportunity: str = Field(..., description="How a new brand could solve this better than anyone currently does")
-    evidence: str = Field(..., description="Specific quotes or signals from the data that support this pain point")
+    theme: str
+    description: str
+    affected_competitors: list[str]
+    opportunity: str
+    evidence: str
 
 
 class MarketWhiteSpace(BaseModel):
-    """A specific positioning opportunity no current competitor owns."""
-    description: str = Field(..., description="What the white space is — be specific")
-    axis_1_position: str = Field(..., description="Where on axis 1 this white space sits")
-    axis_2_position: str = Field(..., description="Where on axis 2 this white space sits")
-    why_it_exists: str = Field(..., description="Why no current competitor owns this space")
-    evidence: str = Field(..., description="Which competitor gaps create this opportunity")
+    description: str
+    axis_1_position: str
+    axis_2_position: str
+    why_it_exists: str
+    evidence: str
 
 
 class BrandAnalystOutput(BaseModel):
-    """
-    Complete brand positioning analysis output.
-    Every field is grounded in real data — no invented insights.
-    """
-    # Dynamic axes derived from industry context
     positioning_axes: PositioningAxes
-
-    # Enriched competitor profiles
     competitors: list[CompetitorProfile]
-
-    # Strategic opportunities
-    white_spaces: list[MarketWhiteSpace] = Field(..., description="One or more positioning gaps identified")
+    white_spaces: list[MarketWhiteSpace]
     pain_points: list[PainPoint]
-
-    # Final output
-    positioning_recommendation: str = Field(
-        ...,
-        description="The single strongest positioning a new brand could own. Must reference specific white space and pain points."
-    )
-    target_audience_summary: str = Field(
-        ...,
-        description="Who the new brand should target and why — based on underserved segments identified in competitor analysis"
-    )
-    competitive_advantage: str = Field(
-        ...,
-        description="The specific advantage the new brand has if it takes the recommended position"
-    )
+    positioning_recommendation: str
+    target_audience_summary: str
+    competitive_advantage: str
 
 
 class PositioningStatement(BaseModel):
-    """
-    A structured brand positioning statement derived from white space analysis.
-    Bridges the brand analyst output to the strategy writer input.
-    """
-    for_audience: str = Field(..., description="The specific target audience")
-    who_need: str = Field(..., description="The specific need or frustration they have")
-    brand_name_placeholder: str = Field(default="[Brand Name]", description="Placeholder until strategy writer names the brand")
-    is_the: str = Field(..., description="The category the brand competes in")
-    that: str = Field(..., description="The single key differentiator")
-    unlike: str = Field(..., description="The main competitor being differentiated from")
-    we: str = Field(..., description="The proof point — why this is believable")
-    full_statement: str = Field(..., description="The complete formatted positioning statement")
-
-
-class PositioningStatement(BaseModel):
-    """
-    A structured brand positioning statement derived from white space analysis.
-    Bridges the brand analyst output to the strategy writer input.
-    """
-    for_audience: str = Field(..., description="The specific target audience")
-    who_need: str = Field(..., description="The specific need or frustration they have")
-    brand_name_placeholder: str = Field(default="[Brand Name]", description="Placeholder until strategy writer names the brand")
-    is_the: str = Field(..., description="The category the brand competes in")
-    that: str = Field(..., description="The single key differentiator")
-    unlike: str = Field(..., description="The main competitor being differentiated from")
-    we: str = Field(..., description="The proof point — why this is believable")
-    full_statement: str = Field(..., description="The complete formatted positioning statement")
+    """Structured positioning statement bridging analyst output to strategy writer."""
+    for_audience: str
+    who_need: str
+    brand_name_placeholder: str = Field(default="[Brand Name]")
+    is_the: str
+    that: str
+    unlike: str
+    we: str
+    full_statement: str

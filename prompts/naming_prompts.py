@@ -131,8 +131,8 @@ SCORING per name — four dimensions:
 3. cultural_relevance (0-5): CONDITIONAL — if the non-negotiable or differentiator explicitly
    mentions culture/nationality/local identity → score normally. If not → geographic and
    landmark names score max 1/5 (they describe location, not the brand promise).
-4. memorability (0-5): short, easy to say, distinct?
-
+4. memorability (0-5): short, easy to say, distinct? MAXIMUM 2 WORDS. 
+   Names with 3+ words score 0 on memorability and are excluded from top 10.
 overall_score = (non_negotiable_alignment×2 + differentiator_alignment×2 + cultural_relevance + memorability) / 30 × 10
 
 Reject any name scoring 0-1 on non_negotiable_alignment.

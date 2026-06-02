@@ -28,6 +28,7 @@ Market context: {market_context}
 
 Identify the two most strategically relevant positioning axes for this specific market:"""
 
+
 ENRICHMENT_EXTRACTION_SYSTEM_PROMPT = """You are a brand intelligence analyst.
 
 You will receive raw data about a competitor — customer reviews and online presence data.
@@ -60,7 +61,17 @@ STRICT RULES:
 - If a signal is not in the data, use an empty list [] for list fields
 - Pricing tier must come from actual price mentions or strong signals in the data
 - Target audience must come from who is mentioned in reviews or marketing language
-- Data confidence: high if 3+ strong signals, medium if 1-2 signals, low if mostly inferred"""
+- Data confidence: high if 3+ strong signals, medium if 1-2 signals, low if mostly inferred
+
+WEAKNESSES — this field is critically important and must not be empty if ANY of these exist:
+- Any review mentioning slow service, bad experience, poor quality, overpriced, rude staff,
+  cold food, wrong orders, long wait, inconsistency, or any complaint
+- Any low individual review rating (1-3 stars) within the data
+- Any gap between what the brand claims and what reviewers say
+- Any pricing complaint or value-for-money concern
+- If the competitor has weaknesses in the data and you leave this field empty, your output is wrong.
+- If genuinely no negative signal exists anywhere in the data, return ["No negative signals found in available data"]"""
+
 
 ENRICHMENT_EXTRACTION_HUMAN_TEMPLATE = """Competitor: {name}
 Google Rating: {rating}/5 ({review_count} reviews)
@@ -74,9 +85,12 @@ Raw customer reviews:
 Online presence data:
 {online_data}
 
+Data notes: {data_note}
+
 Score this competitor using the full 0-10 scale.
 Justify each score with specific evidence from the data above.
 Extract the competitor profile:"""
+
 
 SYNTHESIS_SYSTEM_PROMPT = """You are a principal brand strategist at a top branding agency.
 
