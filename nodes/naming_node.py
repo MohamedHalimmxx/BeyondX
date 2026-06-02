@@ -250,6 +250,24 @@ async def naming_node(
             candidate.brand_conflict = conflict.get("status", "unknown")
             candidate.conflict_reason = conflict.get("reason", "")
 
+    # ── Post-validation fix ──
+    def rank_key(c):
+        status_rank = {"clear": 0, "unknown": 1, "conflict": 2}.get(c.brand_conflict, 1)
+        return (status_rank, -c.score)
+
+    naming_output.candidates.sort(key=rank_key)
+
+    top = naming_output.top_recommendation
+    top_candidate = next((c for c in naming_output.candidates if c.name == top), None)
+    if top_candidate is None or top_candidate.brand_conflict == "conflict":
+        best = next(
+            (c for c in naming_output.candidates if c.brand_conflict != "conflict"),
+            naming_output.candidates[0] if naming_output.candidates else None
+        )
+        if best:
+            naming_output.top_recommendation = best.name
+            logger.info(f"Top recommendation updated: '{top}' was conflicted → '{best.name}' selected.")
+
     clear = sum(1 for c in naming_output.candidates if c.brand_conflict == "clear")
     conflicts = sum(1 for c in naming_output.candidates if c.brand_conflict == "conflict")
     logger.info(
