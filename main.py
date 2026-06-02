@@ -12,6 +12,9 @@ from nodes.analyst_node import generate_positioning_statement
 from utils.brand_brief import collect_brand_brief
 from utils.positioning_map import render_positioning_map
 from config.llm_factory import get_primary_llm
+from agents.brand_identity_agent import BrandIdentityAgent
+from state.brand_identity_state import BrandIdentityOutput
+ 
 
 load_dotenv()
 
@@ -209,6 +212,65 @@ async def main() -> None:
 
         print("\n" + "=" * 70)
         print("Operation completed successfully.")
+
+        # Stage 5 — Brand Identity
+        print("\n" + "=" * 70)
+        print("[Stage 5] Building brand identity document...")
+        print("(Mission, vision, origin story, voice, values, tagline. Please hold.)\n")
+ 
+        identity_agent = BrandIdentityAgent()
+        identity = await identity_agent.generate_identity(
+            idea=enriched_idea,
+            positioning_statement=statement.full_statement,
+            naming_output=naming_output,
+            analysis=analysis,
+            brand_brief=brand_brief,
+        )
+ 
+        print("\n" + "=" * 70)
+        print("BRAND IDENTITY DOCUMENT")
+        print("=" * 70)
+ 
+        print(f"\n## Selected Brand Name")
+        print(f"  {identity.selected_name}")
+        print(f"  Rationale: {identity.name_rationale}")
+ 
+        print(f"\n## Mission")
+        print(f"  {identity.mission}")
+ 
+        print(f"\n## Vision")
+        print(f"  {identity.vision}")
+ 
+        print(f"\n## Brand Promise")
+        print(f"  {identity.brand_promise}")
+ 
+        print(f"\n## Origin Story")
+        for para in identity.origin_story.split("\n\n"):
+            if para.strip():
+                print(f"\n  {para.strip()}")
+ 
+        print(f"\n## Personality Traits")
+        for trait in identity.personality_traits:
+            print(f"  — {trait}")
+ 
+        print(f"\n## Brand Voice")
+        print(f"  IS:")
+        for v in identity.brand_voice_is:
+            print(f"    + {v}")
+        print(f"  NEVER:")
+        for v in identity.brand_voice_never:
+            print(f"    - {v}")
+ 
+        print(f"\n## Core Values")
+        for val in identity.core_values:
+            print(f"  • {val}")
+ 
+        print(f"\n## Tagline")
+        print(f"  \"{identity.tagline}\"")
+ 
+        print("\n" + "=" * 70)
+        print("Operation completed successfully.")
+ 
 
     except KeyboardInterrupt:
         print("\n\nCancelled by user.")
