@@ -21,6 +21,10 @@ class AppSettings(BaseSettings):
         default=None,
         description="Google Gemini API key. Used as final fallback when both Groq keys are exhausted."
     )
+    GEMINI_API_KEY_2: Optional[SecretStr] = Field(
+        default=None,
+        description="Fallback Gemini API key for visual identity generation."
+    )
     CEREBRAS_API_KEY: Optional[SecretStr] = Field(
         default=None,
         description="Cerebras API key. Used as fallback when Groq keys are exhausted."
@@ -48,6 +52,10 @@ class AppSettings(BaseSettings):
     GEMINI_MODEL: str = Field(
         default="gemini-2.0-flash",
         description="Gemini model used as fallback."
+    )
+    GEMINI_IMAGE_MODEL: str = Field(
+        default="gemini-2.0-flash-preview-image-generation",
+        description="Gemini model used for image generation (logo concepts)."
     )
     LLM_TEMPERATURE: float = Field(
         default=0.1,

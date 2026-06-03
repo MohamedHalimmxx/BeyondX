@@ -131,7 +131,9 @@ async def _generate_positioning(llm, idea: str, analysis: BrandAnalystOutput) ->
                 "Write a positioning statement: "
                 "'For [audience] who [need], [Brand] is the [category] that [differentiator]. "
                 "Unlike [competitor], we [proof point].' "
-                "Every field must be specific. The full_statement field must be the complete sentence."
+                "Every field must be specific. The full_statement field must be the complete sentence. "
+                "The 'who_need' field describes the specific need or frustration this audience has. "
+                "This field is REQUIRED — never omit it."
             ),
         },
         {

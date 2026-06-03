@@ -65,7 +65,7 @@ class BrandAnalystOutput(BaseModel):
 
 class PositioningStatement(BaseModel):
     for_audience: str
-    who_need: str
+    who_need: str = Field(default="")
     brand_name_placeholder: str = Field(default="[Brand Name]")
     is_the: str
     that: str

@@ -15,6 +15,7 @@ from nodes.analyst_node import generate_positioning_statement
 from utils.brand_brief import collect_brand_brief
 from utils.positioning_map import render_positioning_map
 from config.llm_factory import get_primary_llm
+from agents.visual_identity_agent import VisualIdentityAgent
  
 
 load_dotenv()
@@ -284,6 +285,63 @@ async def main() -> None:
  
         print("\n" + "=" * 70)
         print("Operation completed successfully.")
+
+        try:
+            # Stage 6 — Visual Identity
+            print("\n" + "=" * 70)
+            print("[Stage 6] Generating visual identity...")
+            print("(Color palette, typography, and logo concepts. Please hold.)\n")
+
+            visual_agent = VisualIdentityAgent()
+            from pathlib import Path
+            brand_pack_dir = Path("brand_packs") / identity.selected_name.lower().replace(" ", "_")
+
+            visual = await visual_agent.generate_visual_identity(
+                brand_name=identity.selected_name,
+                identity=identity,
+                analysis=analysis,
+                output_dir=brand_pack_dir,
+            )
+
+            print("\n" + "=" * 70)
+            print("VISUAL IDENTITY")
+            print("=" * 70)
+
+            print(f"\n## Visual Direction")
+            print(f"  {visual.visual_direction}")
+
+            print(f"\n## Color Palette")
+            for c in visual.colors:
+                print(f"\n  [{c.role.upper()}] {c.name} — {c.hex}")
+                print(f"    Rationale: {c.rationale}")
+                print(f"    Usage: {c.usage}")
+
+            print(f"\n## Typography")
+            print(f"\n  Primary: {visual.typography.primary_font}")
+            print(f"    Role: {visual.typography.primary_font_role}")
+            print(f"    URL: {visual.typography.primary_font_url}")
+            print(f"\n  Secondary: {visual.typography.secondary_font}")
+            print(f"    Role: {visual.typography.secondary_font_role}")
+            print(f"    URL: {visual.typography.secondary_font_url}")
+            print(f"\n  Pairing: {visual.typography.pairing_rationale}")
+
+            print(f"\n## Logo Concepts")
+            if visual.logo_paths:
+                print(f"  {len(visual.logo_paths)} logo concepts generated:")
+                for path in visual.logo_paths:
+                    print(f"    → {path}")
+            else:
+                print("  Logo generation unavailable — visual brief saved.")
+
+            print(f"\n## Brand Pack Location")
+            print(f"  {brand_pack_dir}/")
+
+            print("\n" + "=" * 70)
+            print("Operation completed successfully.")
+
+        except Exception as e:
+            print(f"\n  ⚠️  Visual identity generation failed: {str(e)[:80]}")
+            print("  Stages 1-5 completed successfully. Fix Gemini key and rerun.")
  
 
     except KeyboardInterrupt:
