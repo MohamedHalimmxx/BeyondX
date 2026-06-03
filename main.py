@@ -87,8 +87,8 @@ async def main() -> None:
 
         analyst = BrandAnalystAgent()
         research_report = final_report if final_report else "\n".join(gathered_data)
-        if len(research_report) > 4000:
-            research_report = research_report[:4000] + "\n[... truncated ...]"
+        if len(research_report) > 8000:
+            research_report = research_report[:8000] + "\n[... truncated ...]"
         analysis = await analyst.execute_analysis(
             idea=enriched_idea,
             research_report=research_report,
@@ -112,7 +112,8 @@ async def main() -> None:
 
         print(f"\n## Competitor Profiles ({len(analysis.competitors)} enriched)")
         for c in analysis.competitors:
-            print(f"\n  {c.name} — {c.rating}/5 ({c.review_count} reviews) [{c.data_confidence} confidence]")
+            rating_str = f"{c.rating}/5 ({c.review_count} reviews)" if c.rating is not None else "No rating data"
+            print(f"\n  {c.name} — {rating_str} [{c.data_confidence} confidence]")
             print(f"    {analysis.positioning_axes.axis_1_label}: {c.axis_1_score}/10 ({c.pricing_tier})")
             print(f"    {analysis.positioning_axes.axis_2_label}: {c.axis_2_score}/10 ({c.service_style})")
             print(f"    Personality: {c.brand_personality}")

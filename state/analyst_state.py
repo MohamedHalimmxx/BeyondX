@@ -4,19 +4,22 @@ from pydantic import BaseModel, Field
 
 
 class PositioningAxes(BaseModel):
-    axis_1_label: str = Field(..., description="Name of the first axis, e.g. 'Price Point'")
-    axis_1_low: str = Field(..., description="Low end label, e.g. 'Budget'")
-    axis_1_high: str = Field(..., description="High end label, e.g. 'Premium'")
-    axis_2_label: str = Field(..., description="Name of the second axis, e.g. 'Experience Type'")
-    axis_2_low: str = Field(..., description="Low end label, e.g. 'Traditional'")
-    axis_2_high: str = Field(..., description="High end label, e.g. 'Innovative'")
-    reasoning: str = Field(..., description="Why these two axes are most relevant for this industry and market")
+    axis_1_label: str
+    axis_1_low: str
+    axis_1_high: str
+    axis_2_label: str
+    axis_2_low: str
+    axis_2_high: str
+    reasoning: str
 
 
 class CompetitorProfile(BaseModel):
     name: str
-    rating: float = Field(..., description="Google rating out of 5")
-    review_count: int
+    rating: Optional[float] = Field(
+        default=None,
+        description="Google rating out of 5. None if no review data available."
+    )
+    review_count: int = Field(default=0)
 
     axis_1_score: float = Field(..., ge=0, le=10)
     axis_2_score: float = Field(..., ge=0, le=10)
@@ -31,7 +34,7 @@ class CompetitorProfile(BaseModel):
     top_weaknesses: list[str] = Field(default_factory=list)
 
     evidence_summary: str
-    data_confidence: str = Field(..., description="high / medium / low")
+    data_confidence: str
 
 
 class PainPoint(BaseModel):
@@ -61,7 +64,6 @@ class BrandAnalystOutput(BaseModel):
 
 
 class PositioningStatement(BaseModel):
-    """Structured positioning statement bridging analyst output to strategy writer."""
     for_audience: str
     who_need: str
     brand_name_placeholder: str = Field(default="[Brand Name]")

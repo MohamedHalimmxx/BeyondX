@@ -1,4 +1,4 @@
-"""Strategy Writer Node processing logic for the LangGraph pipeline."""
+"""Strategy Writer Node — generates the Go-To-Market playbook."""
 
 import logging
 from typing import Any, cast
@@ -10,6 +10,7 @@ from prompts.strategy_prompts import (
     STRATEGY_GENERATOR_SYSTEM_PROMPT,
     STRATEGY_GENERATOR_HUMAN_TEMPLATE,
 )
+from utils.llm_utils import invoke_with_fallback
 
 logger = logging.getLogger("research_agent.nodes.strategy_node")
 
@@ -19,8 +20,6 @@ def compile_markdown_brief(
     statement: str,
     map_ascii: str,
 ) -> str:
-    """Converts the validated Pydantic object into a clean presentation document."""
-
     md = f"""# COMPREHENSIVE GO-TO-MARKET STRATEGY WORKBOOK
 
 ## 1. Brand Positioning Anchor
@@ -44,39 +43,31 @@ def compile_markdown_brief(
 ### Value Proposition Copywriting Hooks
 
 """
-
     for hook in plan.messaging_framework.value_prop_hooks:
         md += f"* {hook}\n"
 
     md += "\n### Brand Voice & Expression Guidelines:\n"
-
     for rule in plan.messaging_framework.brand_voice_guidelines:
         md += f"- {rule}\n"
 
     md += "\n---\n\n## 3. Targeted Channel Matrix\n"
-
     for chan in plan.channel_matrix:
         md += f"### {chan.channel_name} | Weight: **{chan.allocation_weight}**\n"
         md += f"* **Execution Blueprint:** {chan.execution_strategy}\n\n"
 
     md += "---\n\n## 4. 90-Day Tactical Launch Roadmap\n"
-
     for phase in plan.ninety_day_launch_roadmap:
         md += f"### {phase.phase_name}\n"
         md += f"* **Core Objective:** {phase.strategic_objective}\n"
-
         md += "* **Tactical Actions:**\n"
         for act in phase.tactical_actions:
             md += f"  - {act}\n"
-
         md += "* **Success Metrics / KPIs:**\n"
         for kpi in phase.kpis_to_track:
             md += f"  - {kpi}\n"
-
         md += "\n"
 
     md += "---\n\n## 5. Creative Content Pillars\n"
-
     for pillar in plan.creative_content_pillars:
         md += f"* **Pillar Theme:** {pillar}\n"
 
@@ -85,44 +76,11 @@ def compile_markdown_brief(
         "## 6. Operational Defensive Moat Strategy\n"
         f"{plan.defensive_moat_strategy}\n"
     )
-
     return md
 
 
-async def strategy_node(
-    state: dict[str, Any],
-    config: dict[str, Any],
-) -> dict[str, Any]:
-    """
-    Ingests research data and brand parameters to output
-    a fully realized strategy engine.
-    """
-
-    logger.info(
-        "Executing Strategy Node: Generating custom Go-To-Market blueprint."
-    )
-
-    llm: BaseChatModel | None = (
-        config.get("configurable", {}).get("llm")
-    )
-
-    if llm is None:
-        raise KeyError("LLM must be injected into graph configuration.")
-
-    structured_strategy_llm = llm.with_structured_output(
-        StrategicGoToMarketPlan
-    )
-
-    human_content = STRATEGY_GENERATOR_HUMAN_TEMPLATE.format(
-        idea=state.get("idea", ""),
-        research_report=state.get(
-            "final_report",
-            state.get("research_report", ""),
-        ),
-        positioning_statement=state.get("positioning_statement", ""),
-        positioning_map_ascii=state.get("positioning_map_ascii", ""),
-    )
-
+async def _run_strategy(llm: BaseChatModel, state: dict) -> StrategicGoToMarketPlan:
+    structured_llm = llm.with_structured_output(StrategicGoToMarketPlan)
     messages = [
         {
             "role": "system",
@@ -134,32 +92,34 @@ async def strategy_node(
         },
         {
             "role": "user",
-            "content": human_content,
+            "content": STRATEGY_GENERATOR_HUMAN_TEMPLATE.format(
+                idea=state.get("idea", ""),
+                research_report=state.get("final_report", state.get("research_report", "")),
+                positioning_statement=state.get("positioning_statement", ""),
+                positioning_map_ascii=state.get("positioning_map_ascii", ""),
+            ),
         },
     ]
+    return cast(StrategicGoToMarketPlan, await structured_llm.ainvoke(messages))
 
-    try:
-        raw_plan = await structured_strategy_llm.ainvoke(messages)
 
-        validated_plan = cast(StrategicGoToMarketPlan, raw_plan)
+async def strategy_node(
+    state: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    logger.info("Executing Strategy Node: Generating custom Go-To-Market blueprint.")
 
-        final_brief_text = compile_markdown_brief(
-            plan=validated_plan,
-            statement=state.get("positioning_statement", ""),
-            map_ascii=state.get("positioning_map_ascii", ""),
-        )
+    llm: BaseChatModel | None = config.get("configurable", {}).get("llm")
+    if llm is None:
+        raise KeyError("LLM must be injected into graph configuration.")
 
-        logger.info(
-            "Strategy Node successfully built and formatted strategy brief."
-        )
+    validated_plan = await invoke_with_fallback(_run_strategy, llm, state)
 
-        return {
-            "final_strategic_brief": final_brief_text
-        }
+    final_brief_text = compile_markdown_brief(
+        plan=validated_plan,
+        statement=state.get("positioning_statement", ""),
+        map_ascii=state.get("positioning_map_ascii", ""),
+    )
 
-    except Exception as exc:
-        logger.error(
-            f"Execution failure during strategy synthesis layer: {str(exc)}",
-            exc_info=True,
-        )
-        raise
+    logger.info("Strategy Node successfully built and formatted strategy brief.")
+    return {"final_strategic_brief": final_brief_text}

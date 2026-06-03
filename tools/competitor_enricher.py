@@ -68,7 +68,7 @@ async def search_competitor_online(
     """Tavily web search for pricing signals, brand info, online presence."""
     api_key = settings.TAVILY_API_KEY.get_secret_value()
     client = AsyncTavilyClient(api_key=api_key)
-    query = f'"{competitor_name}" {location} {category} menu prices reviews brand'
+    query = f'"{competitor_name}" {location} {category} pricing features reviews'
 
     try:
         response = await client.search(
@@ -87,6 +87,48 @@ async def search_competitor_online(
         return f"Online search failed for {competitor_name}."
 
 
+async def search_competitor_complaints(
+    competitor_name: str, category: str
+) -> str:
+    """
+    Targeted search for real user complaints, negative reviews, and problems.
+    Searches Reddit, Trustpilot, G2, Capterra — where real users complain.
+    This is critical for digital/SaaS competitors that have no Google Places data.
+    """
+    api_key = settings.TAVILY_API_KEY.get_secret_value()
+    client = AsyncTavilyClient(api_key=api_key)
+
+    query = (
+        f'"{competitor_name}" {category} reviews complaints problems '
+        f'site:reddit.com OR site:trustpilot.com OR site:g2.com OR site:capterra.com OR site:producthunt.com'
+    )
+
+    try:
+        response = await client.search(
+            query=query, search_depth="basic", max_results=3, include_raw_content=False
+        )
+        results = response.get("results", [])
+        if not results:
+            # Fallback — broader negative signal search without site restriction
+            query_broad = f'"{competitor_name}" {category} "not good" OR "issue" OR "problem" OR "complaint" OR "bad experience" reviews'
+            response = await client.search(
+                query=query_broad, search_depth="basic", max_results=3, include_raw_content=False
+            )
+            results = response.get("results", [])
+
+        if not results:
+            return f"No complaint data found for {competitor_name}."
+
+        compiled = [
+            f"[SOURCE: {r.get('url', '')}]\n{r.get('content', '')}"
+            for r in results if r.get("content")
+        ]
+        return f"User complaints and reviews for {competitor_name}:\n" + "\n\n---\n\n".join(compiled)
+    except Exception as exc:
+        logger.error(f"Complaint search failed for {competitor_name}: {exc}")
+        return f"Complaint search failed for {competitor_name}."
+
+
 async def enrich_competitor(
     name: str,
     rating: float,
@@ -97,15 +139,15 @@ async def enrich_competitor(
 ) -> dict:
     """
     Enrich a competitor with real data.
-    - Physical businesses: Google Places (rating + reviews) + Tavily (online presence)
-    - Digital/SaaS businesses: Tavily only (no Places lookup)
-    Rating and review_count are resolved from Places when available.
+    Physical businesses: Google Places (rating + reviews) + Tavily online presence
+    Digital/SaaS: Tavily online presence + dedicated complaint search on review platforms
     """
     logger.info(f"Enriching competitor: {name}")
 
     resolved_rating = rating
     resolved_review_count = review_count
     reviews_text = ""
+    complaint_text = ""
 
     if has_physical_location:
         place_data = await get_place_data(place_name=name, location=location)
@@ -120,22 +162,31 @@ async def enrich_competitor(
             logger.info(f"No Places data for {name} — falling back to Tavily web search.")
             reviews_text = await search_competitor_online(name, location, category)
     else:
-        # Digital/SaaS competitor — skip Places entirely
+        # Digital competitor — skip Places, use Tavily for brand info
         reviews_text = await search_competitor_online(name, location, category)
+        # Also search for complaints on review platforms
+        complaint_text = await search_competitor_complaints(name, category)
+        logger.info(f"Digital competitor {name}: using Tavily + complaint search.")
 
-    # Single Tavily call for online presence (separate from reviews)
     online_data = await search_competitor_online(name, location, category)
 
-    if resolved_review_count == 0 and "No online data" in online_data:
-        data_note = "WARNING: No review data or online data found. Scores based on inference only."
-    elif resolved_review_count == 0:
-        data_note = "NOTE: No Google reviews found. Scores based on web search data only."
-    else:
+    # Combine complaint data into reviews_data for digital competitors
+    if complaint_text and "No complaint data" not in complaint_text:
+        reviews_text = reviews_text + "\n\n" + complaint_text
+
+    # Honest confidence signal
+    if resolved_review_count > 0:
         data_note = f"Data from {resolved_review_count} reviews (rating: {resolved_rating}/5)."
+    elif complaint_text and "No complaint data" not in complaint_text:
+        data_note = "NOTE: No Google reviews. Scores based on web search + review platform data."
+    elif "No online data" in online_data:
+        data_note = "WARNING: No review data or online data found. Scores based on inference only."
+    else:
+        data_note = "NOTE: No Google reviews found. Scores based on web search data only."
 
     return {
         "name": name,
-        "rating": resolved_rating,
+        "rating": resolved_rating if resolved_review_count > 0 else None,
         "review_count": resolved_review_count,
         "reviews_data": reviews_text,
         "online_data": online_data,

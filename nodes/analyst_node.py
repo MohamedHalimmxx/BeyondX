@@ -210,7 +210,7 @@ async def analyst_node(
 
     logger.info("Step 5: Synthesizing white spaces, pain points, and positioning.")
     competitor_profiles_text = "\n\n".join([
-        f"**{p.name}** (Rating: {p.rating}/5, {p.review_count} reviews)\n"
+        f"**{p.name}** ({'Rating: ' + str(p.rating) + '/5, ' + str(p.review_count) + ' reviews' if p.rating is not None else 'No Google rating — web data only'})\n"
         f"- {axes.axis_1_label}: {p.axis_1_score}/10 ({p.pricing_tier})\n"
         f"- {axes.axis_2_label}: {p.axis_2_score}/10 ({p.service_style})\n"
         f"- Brand personality: {p.brand_personality}\n"

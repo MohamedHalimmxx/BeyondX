@@ -126,7 +126,19 @@ STRICT RULES:
 - Every claim must reference specific competitor evidence
 - No generic branding advice — everything must be market-specific
 - If data is insufficient for a claim, say so explicitly
-- The recommendation must be something NO current competitor owns"""
+- The recommendation must be something NO current competitor owns
+
+PAIN POINTS — CRITICAL RULE:
+- You MUST extract pain points if ANY competitor profile shows weaknesses, complaints, or negative signals in their data.
+- If top_weaknesses is non-empty for any competitor, that is direct evidence for a pain point.
+- If complaint search data mentions any issue, frustration, or problem, extract it as a pain point.
+- Minimum: if competitor data was enriched and weaknesses exist, return at least 1 pain point.
+- A pain point is NOT invented — it must reference specific evidence from the competitor profiles above.
+- Returning 0 pain points when weaknesses exist in the data is an error.
+ 
+
+
+"""
 
 SYNTHESIS_HUMAN_TEMPLATE = """Business Idea: {idea}
 
