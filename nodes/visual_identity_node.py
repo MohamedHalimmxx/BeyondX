@@ -188,7 +188,7 @@ async def _generate_logo_images(
                     client.models.generate_content,
                     model=settings.GEMINI_IMAGE_MODEL,
                     contents=full_prompt,
-                    config={"response_modalities": ["IMAGE"]},
+                    config={"response_modalities": ["Text", "Image"]},
                 )
 
                 for part in response.candidates[0].content.parts:
@@ -246,6 +246,8 @@ async def visual_identity_node(
         mission=identity.mission,
     )
 
+    logger.info("Waiting 60s for Gemini image quota to refresh...")
+    await asyncio.sleep(60)
     logger.info("Step 2: Generating logo concept images via Gemini Imagen.")
     try:
         logo_paths = await _generate_logo_images(

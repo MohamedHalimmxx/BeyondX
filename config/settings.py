@@ -16,15 +16,17 @@ class AppSettings(BaseSettings):
         description="Fallback Groq key if primary hits rate limit."
     )
 
-    # Gemini key
+    # Gemini keys
     GEMINI_API_KEY: Optional[SecretStr] = Field(
         default=None,
-        description="Google Gemini API key. Used as final fallback when both Groq keys are exhausted."
+        description="Primary Gemini API key."
     )
     GEMINI_API_KEY_2: Optional[SecretStr] = Field(
         default=None,
-        description="Fallback Gemini API key for visual identity generation."
+        description="Fallback Gemini API key."
     )
+
+    # Other keys
     CEREBRAS_API_KEY: Optional[SecretStr] = Field(
         default=None,
         description="Cerebras API key. Used as fallback when Groq keys are exhausted."
@@ -43,20 +45,20 @@ class AppSettings(BaseSettings):
     # Model config
     FAST_LLM_MODEL: str = Field(
         default="llama-3.1-8b-instant",
-        description="Lightweight model for simple classification tasks — uses 10x fewer tokens."
+        description="Lightweight model for simple classification tasks."
     )
     LLM_MODEL: str = Field(
         default="llama-3.3-70b-versatile",
         description="Primary Groq model."
     )
     GEMINI_MODEL: str = Field(
-        default="gemini-2.0-flash",
-        description="Gemini model used as fallback."
-    )
+        default="gemini-2.5-flash",
+        description="Gemini model for text generation."
+        )
     GEMINI_IMAGE_MODEL: str = Field(
-        default="gemini-2.0-flash-preview-image-generation",
-        description="Gemini model used for image generation (logo concepts)."
-    )
+        default="gemini-2.5-flash-image",
+        description="Gemini model for image generation (logo concepts)."
+        )
     LLM_TEMPERATURE: float = Field(
         default=0.1,
         ge=0.0,

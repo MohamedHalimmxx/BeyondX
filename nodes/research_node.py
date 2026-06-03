@@ -101,7 +101,16 @@ async def extract_idea_context(idea: str, question: str) -> IdeaContext:
         if start == -1 or end == 0:
             raise ValueError(f"No JSON object found in response: {raw[:100]}")
         raw = raw[start:end]
-        data = json.loads(raw)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            # Strip markdown fences and retry
+            cleaned = raw.replace("```json", "").replace("```", "").strip()
+            start = cleaned.find("{")
+            end = cleaned.rfind("}") + 1
+            if start == -1 or end == 0:
+                raise
+            data = json.loads(cleaned[start:end])
         return IdeaContext(**data)
 
     llm = get_primary_llm()
