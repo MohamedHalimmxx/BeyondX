@@ -26,6 +26,8 @@ wheels/
 .env.*
 secrets.json
 
+brand_packs/
+
 *.log
 logs/
 .pytest_cache/
