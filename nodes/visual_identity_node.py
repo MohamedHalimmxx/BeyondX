@@ -1,10 +1,9 @@
-"""Visual Identity Node — generates color palette, typography, and logo concepts via Gemini."""
+"""Visual Identity Node — generates color palette, typography, and logo concepts via Gemini + HuggingFace fallback."""
 
 import asyncio
 import base64
 import logging
 import json
-import time
 from pathlib import Path
 from typing import Optional
 from pydantic import BaseModel, Field
@@ -43,16 +42,13 @@ class VisualIdentityOutput(BaseModel):
     logo_paths: list[str] = Field(default_factory=list)
 
 
-# ── Gemini client with fallback ───────────────────────────────────────────────
+# ── Gemini clients ────────────────────────────────────────────────────────────
 
 def _get_gemini_clients():
-    """Return list of (api_key, client) tuples — primary then fallback."""
     try:
         import google.genai as genai
     except ImportError:
-        raise ImportError(
-            "google-genai package not installed. Run: pip install google-genai"
-        )
+        raise ImportError("google-genai not installed. Run: pip install google-genai")
 
     clients = []
     key1 = settings.GEMINI_API_KEY
@@ -62,9 +58,6 @@ def _get_gemini_clients():
     key2 = getattr(settings, "GEMINI_API_KEY_2", None)
     if key2:
         clients.append(genai.Client(api_key=key2.get_secret_value()))
-
-    if not clients:
-        raise ValueError("No Gemini API key configured. Set GEMINI_API_KEY in .env")
 
     return clients
 
@@ -78,7 +71,44 @@ def _clean_json(raw: str) -> str:
     return raw[start:end]
 
 
-# ── Step 1: Visual brief ──────────────────────────────────────────────────────
+# ── HuggingFace logo generation ───────────────────────────────────────────────
+
+async def _generate_logo_huggingface(
+    prompt: str,
+    filepath: Path,
+) -> bool:
+    """Generate a single logo image via HuggingFace FLUX.1-schnell. Returns True on success."""
+    hf_key = getattr(settings, "HF_API_KEY", None)
+    if not hf_key:
+        logger.warning("HF_API_KEY not set — skipping HuggingFace fallback.")
+        return False
+
+    try:
+        from huggingface_hub import InferenceClient
+
+        logger.info("Trying HuggingFace FLUX.1-schnell (fal-ai provider)...")
+
+        def _generate():
+            client = InferenceClient(
+                provider="fal-ai",
+                api_key=hf_key.get_secret_value(),
+            )
+            return client.text_to_image(
+                prompt,
+                model="black-forest-labs/FLUX.1-schnell",
+            )
+
+        image = await asyncio.to_thread(_generate)
+        image.save(str(filepath))
+        logger.info(f"HuggingFace logo saved: {filepath}")
+        return True
+
+    except Exception as e:
+        logger.warning(f"HuggingFace request failed: {e}")
+        return False
+
+
+# ── Step 1: Visual brief — uses KEY 1 for text ───────────────────────────────
 
 async def _generate_visual_brief(
     brand_name: str,
@@ -129,12 +159,13 @@ Return ONLY valid JSON, no markdown, no explanation:
   "logo_negative_prompt": "photorealistic, stock photo, busy, cluttered, low quality, blurry, watermark, text artifacts, multiple logos"
 }}"""
 
+    # KEY 1 only for text — preserve KEY 2 quota for images
     clients = _get_gemini_clients()
     last_error = None
 
-    for i, client in enumerate(clients):
+    for i, client in enumerate(clients[:1]):  # only key 1
         try:
-            logger.info(f"Generating visual brief with Gemini client {i+1}/{len(clients)}.")
+            logger.info("Generating visual brief with Gemini key 1 (text).")
             response = await asyncio.to_thread(
                 client.models.generate_content,
                 model=settings.GEMINI_MODEL,
@@ -144,15 +175,29 @@ Return ONLY valid JSON, no markdown, no explanation:
             data = json.loads(_clean_json(raw))
             return VisualIdentityOutput(**data)
         except Exception as e:
-            logger.warning(f"Gemini client {i+1} failed for visual brief: {e}")
+            logger.warning(f"Gemini key 1 failed for visual brief: {e}")
             last_error = e
-            if i < len(clients) - 1:
-                await asyncio.sleep(2)
+
+    # fallback to key 2 for text if key 1 fails
+    if len(clients) > 1:
+        try:
+            logger.info("Falling back to Gemini key 2 for visual brief text.")
+            response = await asyncio.to_thread(
+                clients[1].models.generate_content,
+                model=settings.GEMINI_MODEL,
+                contents=prompt,
+            )
+            raw = response.text
+            data = json.loads(_clean_json(raw))
+            return VisualIdentityOutput(**data)
+        except Exception as e:
+            logger.warning(f"Gemini key 2 also failed for visual brief: {e}")
+            last_error = e
 
     raise RuntimeError(f"All Gemini clients failed for visual brief: {last_error}")
 
 
-# ── Step 2: Logo image generation ────────────────────────────────────────────
+# ── Step 2: Logo images — Gemini first, HuggingFace fallback ─────────────────
 
 async def _generate_logo_images(
     visual_output: VisualIdentityOutput,
@@ -163,27 +208,38 @@ async def _generate_logo_images(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved_paths = []
-    clients = _get_gemini_clients()
+    all_clients = _get_gemini_clients()
+
+    # KEY 2 first for images, KEY 1 as fallback
+    if len(all_clients) >= 2:
+        image_clients = [all_clients[1], all_clients[0]]
+    else:
+        image_clients = all_clients
 
     style_variants = [
-        f"minimalist wordmark style, {visual_output.colors[0].hex} on white background",
-        f"geometric icon with wordmark, {visual_output.colors[0].hex} and {visual_output.colors[1].hex}",
-        f"bold typographic mark, {visual_output.colors[0].hex} with {visual_output.colors[2].hex} accent",
+        f"minimalist wordmark logo, {visual_output.colors[0].hex} on white background, vector art, clean professional design",
+        f"geometric icon with brand name, {visual_output.colors[0].hex} and {visual_output.colors[1].hex}, modern logo design",
+        f"bold typographic logo mark, {visual_output.colors[0].hex} with {visual_output.colors[2].hex} accent, award-winning branding",
     ]
 
     for i, variant in enumerate(style_variants[:num_images]):
+        safe_name = brand_name.lower().replace(" ", "_")
+        filename = f"logo_concept_{i+1}_{safe_name}.png"
+        filepath = output_dir / filename
+
         full_prompt = (
             f"{visual_output.logo_prompt}, {variant}, "
             f"brand name text '{brand_name}', "
             f"professional logo design, vector art, scalable, "
-            f"award-winning branding, Behance portfolio quality, "
-            f"negative: {visual_output.logo_negative_prompt}"
+            f"award-winning branding, Behance portfolio quality"
         )
 
-        last_error = None
-        for j, client in enumerate(clients):
+        gemini_success = False
+
+        # Try Gemini first
+        for j, client in enumerate(image_clients):
             try:
-                logger.info(f"Generating logo concept {i+1}/{num_images} with client {j+1}.")
+                logger.info(f"Generating logo {i+1}/{num_images} with Gemini image client {j+1}.")
                 response = await asyncio.to_thread(
                     client.models.generate_content,
                     model=settings.GEMINI_IMAGE_MODEL,
@@ -198,26 +254,35 @@ async def _generate_logo_images(
                             image_bytes = base64.b64decode(image_data)
                         else:
                             image_bytes = image_data
-
-                        safe_name = brand_name.lower().replace(" ", "_")
-                        filename = f"logo_concept_{i+1}_{safe_name}.png"
-                        filepath = output_dir / filename
                         filepath.write_bytes(image_bytes)
                         saved_paths.append(str(filepath))
-                        logger.info(f"Saved: {filepath}")
+                        logger.info(f"Gemini logo saved: {filepath}")
+                        gemini_success = True
                         break
 
-                await asyncio.sleep(3)
-                break  # success — move to next image
+                if gemini_success:
+                    await asyncio.sleep(10)
+                    break
 
             except Exception as e:
-                logger.warning(f"Logo {i+1} client {j+1} failed: {e}")
-                last_error = e
-                if j < len(clients) - 1:
-                    await asyncio.sleep(5)
+                logger.warning(f"Gemini logo {i+1} client {j+1} failed: {e}")
+                if j < len(image_clients) - 1:
+                    logger.info("Waiting 30s before trying next Gemini key...")
+                    await asyncio.sleep(30)
 
-        if last_error and len(saved_paths) <= i:
-            logger.warning(f"Logo concept {i+1} skipped after all clients failed.")
+        # HuggingFace fallback if Gemini failed
+        if not gemini_success:
+            logger.info(f"Gemini quota exhausted for logo {i+1} — trying HuggingFace FLUX...")
+            hf_success = await _generate_logo_huggingface(full_prompt, filepath)
+            if hf_success:
+                saved_paths.append(str(filepath))
+            else:
+                logger.warning(f"Logo concept {i+1} skipped — both Gemini and HuggingFace failed.")
+
+        # wait between logo attempts
+        if i < num_images - 1:
+            logger.info(f"Waiting 15s before next logo concept...")
+            await asyncio.sleep(15)
 
     return saved_paths
 
@@ -235,7 +300,7 @@ async def visual_identity_node(
     if output_dir is None:
         output_dir = Path("brand_packs") / brand_name.lower().replace(" ", "_")
 
-    logger.info("Step 1: Generating color palette, typography, and logo prompt.")
+    logger.info("Step 1: Generating color palette, typography, and logo prompt (Gemini key 1).")
     visual_output = await _generate_visual_brief(
         brand_name=brand_name,
         tagline=identity.tagline,
@@ -246,9 +311,10 @@ async def visual_identity_node(
         mission=identity.mission,
     )
 
-    logger.info("Waiting 60s for Gemini image quota to refresh...")
-    await asyncio.sleep(60)
-    logger.info("Step 2: Generating logo concept images via Gemini Imagen.")
+    logger.info("Waiting 30s before image generation...")
+    await asyncio.sleep(30)
+
+    logger.info("Step 2: Generating logo concepts (Gemini key 2 → key 1 → HuggingFace FLUX).")
     try:
         logo_paths = await _generate_logo_images(
             visual_output=visual_output,

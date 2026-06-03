@@ -42,6 +42,11 @@ class AppSettings(BaseSettings):
         description="Google Places API key for local competitor discovery."
     )
 
+    HF_API_KEY: Optional[SecretStr] = Field(
+        default=None,
+        description="Hugging Face API key for logo image generation fallback."
+    )
+
     # Model config
     FAST_LLM_MODEL: str = Field(
         default="llama-3.1-8b-instant",
