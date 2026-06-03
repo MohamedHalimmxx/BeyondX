@@ -1,6 +1,6 @@
 """State and schema definitions for the Brand Analyst Agent."""
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PositioningAxes(BaseModel):
@@ -20,21 +20,27 @@ class CompetitorProfile(BaseModel):
         description="Google rating out of 5. None if no review data available."
     )
     review_count: int = Field(default=0)
-
     axis_1_score: float = Field(..., ge=0, le=10)
     axis_2_score: float = Field(..., ge=0, le=10)
-
     pricing_tier: Optional[str] = None
     service_style: Optional[str] = None
     brand_personality: str
     target_audience: str
     distribution_channels: str
-
     top_strengths: list[str] = Field(default_factory=list)
     top_weaknesses: list[str] = Field(default_factory=list)
-
     evidence_summary: str
     data_confidence: str
+
+    @field_validator("rating", mode="before")
+    @classmethod
+    def coerce_rating(cls, v):
+        if v is None or v == "None" or v == "":
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
 
 
 class PainPoint(BaseModel):
