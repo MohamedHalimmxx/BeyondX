@@ -122,4 +122,4 @@ async def strategy_node(
     )
 
     logger.info("Strategy Node successfully built and formatted strategy brief.")
-    return {"final_strategic_brief": final_brief_text}
+    return {"final_strategic_brief": final_brief_text, "validated_plan": validated_plan}

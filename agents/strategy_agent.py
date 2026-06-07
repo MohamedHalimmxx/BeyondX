@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, Tuple
 from groq import RateLimitError
 from openai import RateLimitError as CerebrasRateLimitError
 import asyncio
@@ -15,11 +15,15 @@ class StrategyWriterAgent:
         logger.info("Initializing stand-alone Strategy Writer execution context.")
         self.llm = build_groq(api_key=settings.GROQ_API_KEY.get_secret_value(), temperature=0.3)
 
-    async def generate_plan(self, research_state: dict[str, Any]) -> str:
+    async def generate_plan(self, research_state: dict[str, Any]) -> Tuple[str, Any]:
+        """Returns (markdown_string, StrategicGoToMarketPlan)."""
         async def run(llm):
             config = {"configurable": {"llm": llm}}
             result_state = await strategy_node(state=research_state, config=config)
-            return result_state.get("final_strategic_brief", "")
+            return (
+                result_state.get("final_strategic_brief", ""),
+                result_state.get("validated_plan", None),
+            )
         try:
             return await run(self.llm)
         except RateLimitError as e:

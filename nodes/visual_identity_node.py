@@ -1,18 +1,32 @@
-"""Visual Identity Node — generates color palette, typography, and logo concepts via Gemini + HuggingFace fallback."""
+"""Visual Identity Node — generates color palette, typography, and logo concepts.
+
+Logo generation pipeline (5 Principles of Prompting applied):
+  Step 1 — Visual brief: colors, typography, logo seed prompt (Gemini, structured)
+  Step 2 — Divide Labor: LLM generates 3 brand-specific logo concept descriptions
+  Step 3 — Specify Format + Give Direction: build image prompt per concept
+  Step 4 — Generate: Gemini image (all 8 keys) → HuggingFace FLUX fallback
+
+Arabic brand names: image models cannot render RTL text correctly.
+If the brand name contains Arabic script, logos are generated as symbol/icon only.
+The brand name is rendered as HTML text in the brand book.
+"""
 
 import asyncio
 import base64
-import logging
 import json
+import logging
+import re
 from pathlib import Path
 from typing import Optional
+
 from pydantic import BaseModel, Field
+
 from config.settings import settings
 
 logger = logging.getLogger("research_agent.nodes.visual_identity_node")
 
 
-# ── State schema ─────────────────────────────────────────────────────────────
+# ── Output schema ─────────────────────────────────────────────────────────────
 
 class ColorSwatch(BaseModel):
     name: str
@@ -42,24 +56,49 @@ class VisualIdentityOutput(BaseModel):
     logo_paths: list[str] = Field(default_factory=list)
 
 
-# ── Gemini clients ────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _get_gemini_clients():
+def _has_arabic(text: str) -> bool:
+    """Return True if text contains Arabic-script characters."""
+    return bool(re.search(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]', text))
+
+
+async def _get_franco_arabic(brand_name: str, client) -> str:
+    """
+    Transliterate an Arabic brand name to Franco Arabic (Arabizi) for logo use.
+    Franco Arabic uses Latin letters + numbers: ع=3, ح=7, خ=5, ق=2, غ=8, ط=6
+    AI image models can render Franco Arabic correctly unlike Arabic RTL script.
+    """
+    prompt = f"""Transliterate this Arabic brand name to Franco Arabic (Arabizi).
+
+Franco Arabic rules:
+- Use Latin letters to represent Arabic sounds
+- Use numbers for sounds without Latin equivalents: ع=3, ح=7, خ=5, ق=2, غ=8, ط=6
+- Keep it short, readable, and brand-friendly
+- Aim for 1-3 syllables — must look good as a logo wordmark
+- Capitalize first letter
+
+Brand name: {brand_name}
+
+Return ONLY the Franco Arabic result — nothing else. No explanation, no punctuation."""
+
     try:
-        import google.genai as genai
-    except ImportError:
-        raise ImportError("google-genai not installed. Run: pip install google-genai")
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=settings.GEMINI_MODEL,
+            contents=prompt,
+        )
+        franco = response.text.strip().split("\n")[0].strip()
+        logger.info(f"Franco Arabic: '{brand_name}' → '{franco}'")
+        return franco
+    except Exception as e:
+        logger.warning(f"Franco Arabic transliteration failed: {e}. Using original name.")
+        return brand_name
 
-    clients = []
-    key1 = settings.GEMINI_API_KEY
-    if key1:
-        clients.append(genai.Client(api_key=key1.get_secret_value()))
 
-    key2 = getattr(settings, "GEMINI_API_KEY_2", None)
-    if key2:
-        clients.append(genai.Client(api_key=key2.get_secret_value()))
-
-    return clients
+def _spell_out(name: str) -> str:
+    """Return brand name as spaced letters for explicit text rendering."""
+    return " – ".join(list(name))
 
 
 def _clean_json(raw: str) -> str:
@@ -71,21 +110,61 @@ def _clean_json(raw: str) -> str:
     return raw[start:end]
 
 
-# ── HuggingFace logo generation ───────────────────────────────────────────────
+def _clean_json_array(raw: str) -> str:
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    start = raw.find("[")
+    end = raw.rfind("]") + 1
+    if start == -1 or end == 0:
+        raise ValueError("No JSON array found in response")
+    return raw[start:end]
 
-async def _generate_logo_huggingface(
-    prompt: str,
-    filepath: Path,
-) -> bool:
-    """Generate a single logo image via HuggingFace FLUX.1-schnell. Returns True on success."""
+
+# ── Gemini clients (all available keys) ───────────────────────────────────────
+
+def _get_all_gemini_clients():
+    """Return list of Gemini clients from all configured keys."""
+    try:
+        import google.genai as genai
+    except ImportError:
+        raise ImportError("google-genai not installed. Run: pip install google-genai")
+
+    key_attrs = [
+        "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5",
+        "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8",
+        "GEMINI_API_KEY", "GEMINI_API_KEY_2",
+    ]
+    clients = []
+    for attr in key_attrs:
+        key = getattr(settings, attr, None)
+        if key:
+            try:
+                clients.append((genai.Client(api_key=key.get_secret_value()), attr))
+            except Exception:
+                pass
+    return clients
+
+
+def _get_text_clients():
+    """Return all available clients for text generation."""
+    return _get_all_gemini_clients()  # try all 8 keys
+
+
+QUOTA_ERRORS = ("RESOURCE_EXHAUSTED", "429", "QUOTA")
+
+
+def _is_quota_error(e: Exception) -> bool:
+    msg = str(e).upper()
+    return any(q in msg for q in QUOTA_ERRORS)
+
+
+# ── HuggingFace fallback ──────────────────────────────────────────────────────
+
+async def _generate_logo_huggingface(prompt: str, filepath: Path) -> bool:
     hf_key = getattr(settings, "HF_API_KEY", None)
     if not hf_key:
-        logger.warning("HF_API_KEY not set — skipping HuggingFace fallback.")
         return False
-
     try:
         from huggingface_hub import InferenceClient
-
         logger.info("Trying HuggingFace FLUX.1-schnell (fal-ai provider)...")
 
         def _generate():
@@ -102,13 +181,12 @@ async def _generate_logo_huggingface(
         image.save(str(filepath))
         logger.info(f"HuggingFace logo saved: {filepath}")
         return True
-
     except Exception as e:
         logger.warning(f"HuggingFace request failed: {e}")
         return False
 
 
-# ── Step 1: Visual brief — uses KEY 1 for text ───────────────────────────────
+# ── Step 1: Visual brief ──────────────────────────────────────────────────────
 
 async def _generate_visual_brief(
     brand_name: str,
@@ -119,169 +197,310 @@ async def _generate_visual_brief(
     core_values: list[str],
     mission: str,
 ) -> VisualIdentityOutput:
+    """Generate colors, typography, and logo seed prompt."""
 
-    prompt = f"""You are a senior brand designer at a world-class branding agency.
+    prompt = f"""You are a senior brand designer at Pentagram — the world's most respected branding agency.
 
-Based on this brand brief, generate a complete visual identity specification.
+You have been handed a brand brief. Generate a complete visual identity specification.
 
 BRAND NAME: {brand_name}
 TAGLINE: {tagline}
 POSITIONING: {positioning}
-PERSONALITY TRAITS: {', '.join(personality_traits)}
+PERSONALITY: {', '.join(personality_traits)}
 BRAND VOICE: {', '.join(brand_voice[:3])}
 CORE VALUES: {', '.join(core_values[:3])}
 MISSION: {mission}
 
-Generate a visual identity with:
-1. Exactly 3 colors (primary, secondary, accent) with specific hex codes and psychological rationale
-2. Typography pairing — 2 Google Fonts with usage rules and CDN URLs
-3. A detailed logo generation prompt for an AI image model
+Your job:
+1. Choose 3 colors (primary, secondary, accent) that feel inevitable for this brand — not generic industry defaults
+2. Choose 2 Google Fonts that express the brand personality through typography
+3. Write a logo seed prompt that captures the brand's visual world
 
-Return ONLY valid JSON, no markdown, no explanation:
+Return ONLY valid JSON — no markdown, no explanation:
 {{
   "brand_name": "{brand_name}",
-  "visual_direction": "2-3 sentence mood and style summary",
+  "visual_direction": "2-3 sentence mood, aesthetic, and style summary specific to this brand",
   "colors": [
-    {{"name": "color name", "hex": "#XXXXXX", "role": "primary", "rationale": "psychological rationale", "usage": "when and how to use"}},
-    {{"name": "color name", "hex": "#XXXXXX", "role": "secondary", "rationale": "why it fits", "usage": "when and how to use"}},
-    {{"name": "color name", "hex": "#XXXXXX", "role": "accent", "rationale": "why it fits", "usage": "when and how to use"}}
+    {{"name": "evocative color name", "hex": "#XXXXXX", "role": "primary", "rationale": "why this color fits this brand specifically", "usage": "where and how to apply"}},
+    {{"name": "evocative color name", "hex": "#XXXXXX", "role": "secondary", "rationale": "why it complements the primary", "usage": "where and how to apply"}},
+    {{"name": "evocative color name", "hex": "#XXXXXX", "role": "accent", "rationale": "why it works as an accent", "usage": "sparingly — where"}}
   ],
   "typography": {{
     "primary_font": "Font Name",
-    "primary_font_role": "Headlines and brand name display",
+    "primary_font_role": "Headlines and brand name",
     "primary_font_url": "https://fonts.google.com/specimen/Font+Name",
     "secondary_font": "Font Name",
-    "secondary_font_role": "Body text and UI elements",
+    "secondary_font_role": "Body text and UI",
     "secondary_font_url": "https://fonts.google.com/specimen/Font+Name",
-    "pairing_rationale": "why these two fonts work together for this brand"
+    "pairing_rationale": "why these two fonts express this brand's personality"
   }},
-  "logo_prompt": "detailed prompt: minimalist logo for [brand], [style], [colors], professional branding, vector art style, clean lines, award-winning design, white background",
-  "logo_negative_prompt": "photorealistic, stock photo, busy, cluttered, low quality, blurry, watermark, text artifacts, multiple logos"
+  "logo_prompt": "detailed visual world description for this brand's logo — style, mood, visual language",
+  "logo_negative_prompt": "elements that would make this logo wrong for the brand"
 }}"""
 
-    # KEY 1 only for text — preserve KEY 2 quota for images
-    clients = _get_gemini_clients()
+    text_clients = _get_text_clients()
     last_error = None
 
-    for i, client in enumerate(clients[:1]):  # only key 1
+    for client, label in text_clients:
         try:
-            logger.info("Generating visual brief with Gemini key 1 (text).")
+            logger.info(f"Generating visual brief with Gemini ({label}).")
             response = await asyncio.to_thread(
                 client.models.generate_content,
                 model=settings.GEMINI_MODEL,
                 contents=prompt,
             )
-            raw = response.text
-            data = json.loads(_clean_json(raw))
+            data = json.loads(_clean_json(response.text))
             return VisualIdentityOutput(**data)
         except Exception as e:
-            logger.warning(f"Gemini key 1 failed for visual brief: {e}")
-            last_error = e
-
-    # fallback to key 2 for text if key 1 fails
-    if len(clients) > 1:
-        try:
-            logger.info("Falling back to Gemini key 2 for visual brief text.")
-            response = await asyncio.to_thread(
-                clients[1].models.generate_content,
-                model=settings.GEMINI_MODEL,
-                contents=prompt,
-            )
-            raw = response.text
-            data = json.loads(_clean_json(raw))
-            return VisualIdentityOutput(**data)
-        except Exception as e:
-            logger.warning(f"Gemini key 2 also failed for visual brief: {e}")
+            logger.warning(f"Gemini {label} failed for visual brief: {e}")
             last_error = e
 
     raise RuntimeError(f"All Gemini clients failed for visual brief: {last_error}")
 
 
-# ── Step 2: Logo images — Gemini first, HuggingFace fallback ─────────────────
+# ── Step 2: Logo concepts (Divide Labor) ─────────────────────────────────────
+
+async def _generate_logo_concepts(
+    brand_name: str,
+    display_name: str,
+    visual_output: VisualIdentityOutput,
+    personality_traits: list[str],
+    client,
+) -> list[dict]:
+    """
+    Principle 5 — Divide Labor:
+    LLM generates 3 brand-specific logo concept descriptions BEFORE image generation.
+    display_name = Franco Arabic transliteration if Arabic, otherwise same as brand_name.
+    """
+
+    text_rule = (
+        f"CRITICAL TEXT RULE: Every logo concept MUST include the display name spelled EXACTLY as: '{display_name}'\n"
+        f"Letter by letter: {_spell_out(display_name)}\n"
+        f"This exact spelling must appear in every image_generation_prompt you write.\n"
+        + (f"Note: '{display_name}' is the Franco Arabic (Arabizi) version of the Arabic brand name '{brand_name}'."
+           if display_name != brand_name else "")
+    )
+
+    prompt = f"""You are the creative director at Collins, the agency behind Spotify, Dropbox, and Facebook's rebrands.
+
+You are designing 3 logo concepts for this brand:
+
+BRAND: {brand_name}
+VISUAL DIRECTION: {visual_output.visual_direction}
+PRIMARY COLOR: {visual_output.colors[0].hex} ({visual_output.colors[0].name})
+SECONDARY COLOR: {visual_output.colors[1].hex} ({visual_output.colors[1].name})
+ACCENT: {visual_output.colors[2].hex} ({visual_output.colors[2].name})
+PERSONALITY: {', '.join(personality_traits)}
+LOGO SEED: {visual_output.logo_prompt}
+
+{text_rule}
+
+PRINCIPLE 1 — GIVE DIRECTION:
+Each concept must reflect this brand's specific personality. A defiant fintech brand should not look like a luxury spa. Let the personality drive every design decision.
+
+PRINCIPLE 3 — PROVIDE EXAMPLES:
+For each concept, name a real-world logo that shares the same design DNA (e.g., 'similar compositional clarity to the Stripe wordmark').
+
+PRINCIPLE 4 — EVALUATE QUALITY:
+In each concept's image_generation_prompt, explicitly state what would make this logo fail for this specific brand.
+
+Generate 3 COMPLETELY DIFFERENT logo concepts. Approaches to choose from (pick 3 different ones):
+wordmark, lettermark, icon+wordmark, abstract_symbol, monogram, pictorial_mark, emblem
+
+Return ONLY valid JSON array:
+[
+  {{
+    "concept_name": "short name for this concept",
+    "approach": "wordmark|lettermark|icon_wordmark|abstract_symbol|monogram|pictorial_mark|emblem",
+    "design_rationale": "why this approach fits this brand's personality",
+    "real_world_reference": "real logo this shares design DNA with and why",
+    "image_generation_prompt": "complete, detailed, specific prompt for AI image generation"
+  }}
+]"""
+
+    try:
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=settings.GEMINI_MODEL,
+            contents=prompt,
+        )
+        concepts = json.loads(_clean_json_array(response.text))
+        logger.info(f"Generated {len(concepts)} brand-specific logo concepts.")
+        return concepts[:3]
+    except Exception as e:
+        logger.warning(f"Logo concept generation failed: {e}. Using seed prompt fallback.")
+        # Fallback: 3 simple variants of the seed prompt
+        return [
+            {"concept_name": f"Concept {i+1}", "approach": "icon_wordmark",
+             "image_generation_prompt": visual_output.logo_prompt}
+            for i in range(3)
+        ]
+
+
+# ── Step 3: Build final image prompt (Give Direction + Specify Format) ────────
+
+def _build_image_prompt(
+    brand_name: str,
+    display_name: str,
+    concept: dict,
+    visual_output: VisualIdentityOutput,
+) -> tuple[str, str]:
+    """
+    Principle 1 — Give Direction: brand personality drives visual choices
+    Principle 2 — Specify Format: exact constraints for clean logo output
+    Principle 4 — Evaluate Quality: explicit negative prompt
+    display_name = Franco Arabic if Arabic brand, otherwise same as brand_name.
+    """
+    base_prompt = concept.get("image_generation_prompt", visual_output.logo_prompt)
+    primary_hex = visual_output.colors[0].hex
+    secondary_hex = visual_output.colors[1].hex
+    spelled = _spell_out(display_name)
+
+    positive = (
+        f"{base_prompt}, "
+        f"logo text reads exactly '{display_name}' (spelled: {spelled}), "
+        f"brand name '{display_name}' in clean legible typography, "
+        f"color palette: {primary_hex} and {secondary_hex}, "
+        f"professional logo design, vector art style, clean lines, "
+        f"scalable, white background, "
+        f"award-winning brand identity, Behance portfolio quality, "
+        f"inspired by {concept.get('real_world_reference', 'modern brand design')}"
+    )
+    negative = (
+        f"{visual_output.logo_negative_prompt}, "
+        f"misspelled brand name, wrong letters, text artifacts, illegible text, "
+        f"reversed characters, distorted typography, extra letters, missing letters, "
+        f"Arabic script, RTL text, "
+        f"photorealistic, stock photo, busy, cluttered, watermark, "
+        f"low quality, blurry, multiple logos, drop shadow abuse, clip art"
+    )
+    return positive, negative
+
+
+# ── Step 4: Generate image (all 8 Gemini keys → HuggingFace fallback) ────────
+
+async def _generate_single_logo(
+    positive_prompt: str,
+    negative_prompt: str,
+    filepath: Path,
+    all_image_clients: list,
+    concept_num: int,
+    total: int,
+) -> bool:
+    """Try all Gemini image clients in order, then HuggingFace."""
+
+    for client, label in all_image_clients:
+        try:
+            logger.info(f"Generating logo {concept_num}/{total} with Gemini image ({label}).")
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=settings.GEMINI_IMAGE_MODEL,
+                contents=positive_prompt,
+                config={"response_modalities": ["Text", "Image"]},
+            )
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "inline_data") and part.inline_data:
+                    image_data = part.inline_data.data
+                    image_bytes = base64.b64decode(image_data) if isinstance(image_data, str) else image_data
+                    filepath.write_bytes(image_bytes)
+                    logger.info(f"Gemini logo saved: {filepath}")
+                    return True
+        except Exception as e:
+            if _is_quota_error(e):
+                logger.warning(f"Gemini image ({label}) quota exhausted for logo {concept_num}. Trying next key.")
+                await asyncio.sleep(5)
+                continue
+            logger.warning(f"Gemini image ({label}) failed for logo {concept_num}: {str(e)[:100]}")
+            await asyncio.sleep(10)
+            continue
+
+    # HuggingFace fallback
+    logger.info(f"All Gemini image keys exhausted for logo {concept_num} — trying HuggingFace FLUX...")
+    return await _generate_logo_huggingface(positive_prompt, filepath)
+
+
+# ── Main logo generation pipeline ────────────────────────────────────────────
 
 async def _generate_logo_images(
     visual_output: VisualIdentityOutput,
     brand_name: str,
+    personality_traits: list[str],
     output_dir: Path,
     num_images: int = 3,
 ) -> list[str]:
-
     output_dir.mkdir(parents=True, exist_ok=True)
-    saved_paths = []
-    all_clients = _get_gemini_clients()
 
-    # KEY 2 first for images, KEY 1 as fallback
-    if len(all_clients) >= 2:
-        image_clients = [all_clients[1], all_clients[0]]
+    is_arabic = _has_arabic(brand_name)
+
+    # If Arabic: get Franco Arabic transliteration for logo text
+    if is_arabic:
+        text_client = all_clients[0][0] if all_clients else None
+        if text_client:
+            display_name = await _get_franco_arabic(brand_name, text_client)
+        else:
+            display_name = brand_name
+        logger.info(f"Arabic brand name '{brand_name}' → using Franco Arabic '{display_name}' in logos.")
     else:
-        image_clients = all_clients
+        display_name = brand_name
 
-    style_variants = [
-        f"minimalist wordmark logo, {visual_output.colors[0].hex} on white background, vector art, clean professional design",
-        f"geometric icon with brand name, {visual_output.colors[0].hex} and {visual_output.colors[1].hex}, modern logo design",
-        f"bold typographic logo mark, {visual_output.colors[0].hex} with {visual_output.colors[2].hex} accent, award-winning branding",
-    ]
+    all_clients = _get_all_gemini_clients()
+    if not all_clients:
+        logger.warning("No Gemini clients available. Falling back to HuggingFace for all logos.")
+        all_image_clients = []
+    else:
+        all_image_clients = all_clients
 
-    for i, variant in enumerate(style_variants[:num_images]):
+    # Step 2 — Divide Labor: generate brand-specific concepts
+    concept_client = all_clients[0][0] if all_clients else None
+    if concept_client:
+        concepts = await _generate_logo_concepts(
+            brand_name=brand_name,
+            display_name=display_name,
+            visual_output=visual_output,
+            personality_traits=personality_traits,
+            client=concept_client,
+        )
+    else:
+        concepts = [
+            {"concept_name": f"Concept {i+1}", "approach": "icon_wordmark",
+             "image_generation_prompt": visual_output.logo_prompt,
+             "real_world_reference": "modern brand design"}
+            for i in range(num_images)
+        ]
+
+    saved_paths = []
+
+    for i, concept in enumerate(concepts[:num_images]):
         safe_name = brand_name.lower().replace(" ", "_")
-        filename = f"logo_concept_{i+1}_{safe_name}.png"
-        filepath = output_dir / filename
+        filepath = output_dir / f"logo_concept_{i+1}_{safe_name}.png"
 
-        full_prompt = (
-            f"{visual_output.logo_prompt}, {variant}, "
-            f"brand name text '{brand_name}', "
-            f"professional logo design, vector art, scalable, "
-            f"award-winning branding, Behance portfolio quality"
+        # Step 3 — Build prompt applying Give Direction + Specify Format
+        positive_prompt, negative_prompt = _build_image_prompt(
+            brand_name=brand_name,
+            display_name=display_name,
+            concept=concept,
+            visual_output=visual_output,
         )
 
-        gemini_success = False
+        logger.info(f"Logo {i+1} concept: {concept.get('concept_name', '')} ({concept.get('approach', '')})")
 
-        # Try Gemini first
-        for j, client in enumerate(image_clients):
-            try:
-                logger.info(f"Generating logo {i+1}/{num_images} with Gemini image client {j+1}.")
-                response = await asyncio.to_thread(
-                    client.models.generate_content,
-                    model=settings.GEMINI_IMAGE_MODEL,
-                    contents=full_prompt,
-                    config={"response_modalities": ["Text", "Image"]},
-                )
+        # Step 4 — Generate
+        success = await _generate_single_logo(
+            positive_prompt=positive_prompt,
+            negative_prompt=negative_prompt,
+            filepath=filepath,
+            all_image_clients=all_image_clients,
+            concept_num=i + 1,
+            total=num_images,
+        )
 
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, "inline_data") and part.inline_data:
-                        image_data = part.inline_data.data
-                        if isinstance(image_data, str):
-                            image_bytes = base64.b64decode(image_data)
-                        else:
-                            image_bytes = image_data
-                        filepath.write_bytes(image_bytes)
-                        saved_paths.append(str(filepath))
-                        logger.info(f"Gemini logo saved: {filepath}")
-                        gemini_success = True
-                        break
+        if success:
+            saved_paths.append(str(filepath))
+        else:
+            logger.warning(f"Logo concept {i+1} skipped — all providers failed.")
 
-                if gemini_success:
-                    await asyncio.sleep(10)
-                    break
-
-            except Exception as e:
-                logger.warning(f"Gemini logo {i+1} client {j+1} failed: {e}")
-                if j < len(image_clients) - 1:
-                    logger.info("Waiting 30s before trying next Gemini key...")
-                    await asyncio.sleep(30)
-
-        # HuggingFace fallback if Gemini failed
-        if not gemini_success:
-            logger.info(f"Gemini quota exhausted for logo {i+1} — trying HuggingFace FLUX...")
-            hf_success = await _generate_logo_huggingface(full_prompt, filepath)
-            if hf_success:
-                saved_paths.append(str(filepath))
-            else:
-                logger.warning(f"Logo concept {i+1} skipped — both Gemini and HuggingFace failed.")
-
-        # wait between logo attempts
         if i < num_images - 1:
-            logger.info(f"Waiting 15s before next logo concept...")
+            logger.info("Waiting 15s before next logo concept...")
             await asyncio.sleep(15)
 
     return saved_paths
@@ -300,7 +519,7 @@ async def visual_identity_node(
     if output_dir is None:
         output_dir = Path("brand_packs") / brand_name.lower().replace(" ", "_")
 
-    logger.info("Step 1: Generating color palette, typography, and logo prompt (Gemini key 1).")
+    logger.info("Step 1: Generating color palette, typography, and logo seed prompt.")
     visual_output = await _generate_visual_brief(
         brand_name=brand_name,
         tagline=identity.tagline,
@@ -314,11 +533,12 @@ async def visual_identity_node(
     logger.info("Waiting 30s before image generation...")
     await asyncio.sleep(30)
 
-    logger.info("Step 2: Generating logo concepts (Gemini key 2 → key 1 → HuggingFace FLUX).")
+    logger.info("Step 2-4: Generating logo concepts and images.")
     try:
         logo_paths = await _generate_logo_images(
             visual_output=visual_output,
             brand_name=brand_name,
+            personality_traits=identity.personality_traits,
             output_dir=output_dir,
         )
         visual_output.logo_paths = logo_paths

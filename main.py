@@ -171,7 +171,7 @@ async def main() -> None:
         print("(Translating competitor intelligence into dynamic copy hooks. Please hold.)\n")
 
         strategist = StrategyWriterAgent()
-        strategy_playbook = await strategist.generate_plan({
+        strategy_playbook, strategy_plan = await strategist.generate_plan({
             "idea": enriched_idea,
             "research_report": final_report,
             "positioning_statement": statement.full_statement,
@@ -342,8 +342,35 @@ async def main() -> None:
         except Exception as e:
             print(f"\n  ⚠️  Visual identity generation failed: {str(e)[:80]}")
             print("  Stages 1-5 completed successfully. Fix Gemini key and rerun.")
- 
+            visual = None
+            
+        # Stage 7 — Brand Experience
+        print("\n" + "=" * 70)
+        print("[Stage 7] Generating brand experience...")
+        print("(Building your premium HTML brand experience. Please hold.)\n")
 
+        if visual is None:
+            print("  ⚠️  Skipping Stage 7 — visual identity (Stage 6) did not complete.")
+            print("  Fix the Gemini key and rerun to generate the brand experience.")
+        else:
+            try:
+                from agents.brand_book_agent import BrandBookAgent
+                brand_book_agent = BrandBookAgent()
+                brand_safe = identity.selected_name.lower().replace(" ", "_")
+                brand_book_path = await brand_book_agent.generate(
+                    brand_name=identity.selected_name,
+                    identity=identity,
+                    analysis=analysis,
+                    strategy=strategy_plan,
+                    naming=naming_output,
+                    visual=visual,
+                    output_dir=Path("brand_packs") / brand_safe,
+                )
+                print(f"\n  ✅ Brand experience saved: {brand_book_path}")
+                print(f"     Open in browser: file:///Users/hanatarek/BeyondX/{brand_book_path}")
+            except Exception as e:
+                print(f"\n  ⚠️  Brand experience generation failed: {str(e)[:100]}")
+        
     except KeyboardInterrupt:
         print("\n\nCancelled by user.")
     except Exception as err:

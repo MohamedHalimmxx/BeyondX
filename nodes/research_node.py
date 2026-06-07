@@ -116,18 +116,13 @@ async def extract_idea_context(idea: str, question: str) -> IdeaContext:
     llm = get_primary_llm()
     try:
         return await run(llm)
-    except RateLimitError as e:
-        if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
-            logger.warning("Context extraction: primary LLM rate limited. Switching to fallback.")
-            try:
-                return await run(get_fallback_llm())
-            except RateLimitError as e2:
-                if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
-                    logger.warning("Context extraction: both Groq keys exhausted. Switching to Cerebras.")
-                    return await _try_with_cerebras(run)
-                raise
-        raise
-
+    except (RateLimitError, ValueError) as e:
+        logger.warning(f"Context extraction primary failed: {str(e)[:60]}. Switching to fallback.")
+        try:
+            return await run(get_fallback_llm())
+        except (RateLimitError, ValueError) as e2:
+            logger.warning(f"Context extraction fallback failed: {str(e2)[:60]}. Switching to Cerebras.")
+            return await _try_with_cerebras(run)
 
 async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[str, Any]:
     logger.info("Executing Research Node: Commencing data collection cycle.")

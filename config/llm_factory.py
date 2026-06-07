@@ -48,14 +48,18 @@ def get_fast_llm() -> ChatGroq:
 
 def get_fallback_llm(temperature: float | None = None):
     """
-    Fallback chain: Groq key 2 → Cerebras → Gemini
-    Tries each in order and returns the first available.
-    If Groq key 2 is set but exhausted, the calling code handles the next level.
+    Fallback chain: Groq key 2 → Groq key 3 → Cerebras → Gemini
     """
     if settings.GROQ_API_KEY_2:
         logger.warning("Switching to Groq fallback key.")
         return build_groq(
             api_key=settings.GROQ_API_KEY_2.get_secret_value(),
+            temperature=temperature
+        )
+    if getattr(settings, "GROQ_API_KEY_3", None):
+        logger.warning("Switching to Groq key 3.")
+        return build_groq(
+            api_key=settings.GROQ_API_KEY_3.get_secret_value(),
             temperature=temperature
         )
     if settings.CEREBRAS_API_KEY:
