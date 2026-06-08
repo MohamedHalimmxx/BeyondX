@@ -370,6 +370,47 @@ async def main() -> None:
                 print(f"     Open in browser: file:///Users/hanatarek/BeyondX/{brand_book_path}")
             except Exception as e:
                 print(f"\n  ⚠️  Brand experience generation failed: {str(e)[:100]}")
+        # Stage 8 — Lovable
+        print("\n" + "=" * 70)
+        print("[Stage 8] Generating Lovable app files...")
+        print("(Build with URL + Claude Code prompt ready.)\n")
+
+        try:
+            from agents.lovable_agent import LovableAgent
+            lovable = LovableAgent()
+            brand_safe = identity.selected_name.lower().replace(" ", "_")
+            out_dir = Path("brand_packs") / brand_safe
+
+            # Option A — Build with URL (browser)
+            lovable_url = lovable.generate_url(
+                brand_name=identity.selected_name,
+                identity=identity,
+                analysis=analysis,
+                strategy=strategy_plan,
+                naming=naming_output,
+                visual=visual,
+            )
+            lovable.save_url(lovable_url, identity.selected_name, out_dir)
+
+            # Option B — Claude Code prompt (MCP)
+            prompt_file = lovable.save_claude_code_prompt(
+                brand_name=identity.selected_name,
+                identity=identity,
+                analysis=analysis,
+                strategy=strategy_plan,
+                naming=naming_output,
+                visual=visual,
+                output_dir=out_dir,
+            )
+
+            print(f"  ✅ Build with URL saved: {out_dir}/lovable_url.txt")
+            print(f"  ✅ Claude Code prompt saved: {prompt_file}")
+            print(f"\n  To build live React app:")
+            print(f"  Option A — click the URL in lovable_url.txt (~1-2 credits)")
+            print(f"  Option B — open Claude Code, paste {prompt_file}")
+
+        except Exception as e:
+            print(f"\n  ⚠️  Stage 8 failed: {str(e)[:80]}")
         
     except KeyboardInterrupt:
         print("\n\nCancelled by user.")
