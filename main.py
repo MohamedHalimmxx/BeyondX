@@ -1,15 +1,3 @@
-"""
-AgenticApp — Unified Entry Point
-=================================
-Run this file to choose between:
-
-  [1] BrandGenius        — Market research, brand analysis, naming,
-                           identity, visual identity & UI generation.
-
-  [2] Content Creator    — AI-powered social media content strategy,
-                           calendar, posts, campaigns & chat follow-up.
-"""
-
 from __future__ import annotations
 
 import argparse
