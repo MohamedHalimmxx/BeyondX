@@ -1,14 +1,15 @@
 """Visual Identity Node — generates color palette, typography, and logo concepts.
 
+Key separation:
+  Stage 6 text (visual brief) → GEMINI_VISUAL_KEY_1/2/3
+  Stage 6 image (logos)       → GEMINI_LOGO_KEY_1/2/3
+  Stage 7 (brand book)        → GEMINI_BRAND_BOOK_KEY_1/2/3/4 (handled by brand_book_agent.py)
+
 Logo generation pipeline (5 Principles of Prompting applied):
-  Step 1 — Visual brief: colors, typography, logo seed prompt (Gemini, structured)
+  Step 1 — Visual brief: colors, typography, logo seed prompt (Gemini Flash text)
   Step 2 — Divide Labor: LLM generates 3 brand-specific logo concept descriptions
   Step 3 — Specify Format + Give Direction: build image prompt per concept
-  Step 4 — Generate: Gemini image (all 8 keys) → HuggingFace FLUX fallback
-
-Arabic brand names: image models cannot render RTL text correctly.
-If the brand name contains Arabic script, logos are generated as symbol/icon only.
-The brand name is rendered as HTML text in the brand book.
+  Step 4 — Generate: Gemini Flash image (logo keys) → HuggingFace FLUX fallback
 """
 
 import asyncio
@@ -59,16 +60,10 @@ class VisualIdentityOutput(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _has_arabic(text: str) -> bool:
-    """Return True if text contains Arabic-script characters."""
     return bool(re.search(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]', text))
 
 
 async def _get_franco_arabic(brand_name: str, client) -> str:
-    """
-    Transliterate an Arabic brand name to Franco Arabic (Arabizi) for logo use.
-    Franco Arabic uses Latin letters + numbers: ع=3, ح=7, خ=5, ق=2, غ=8, ط=6
-    AI image models can render Franco Arabic correctly unlike Arabic RTL script.
-    """
     prompt = f"""Transliterate this Arabic brand name to Franco Arabic (Arabizi).
 
 Franco Arabic rules:
@@ -97,7 +92,6 @@ Return ONLY the Franco Arabic result — nothing else. No explanation, no punctu
 
 
 def _spell_out(name: str) -> str:
-    """Return brand name as spaced letters for explicit text rendering."""
     return " – ".join(list(name))
 
 
@@ -119,20 +113,21 @@ def _clean_json_array(raw: str) -> str:
     return raw[start:end]
 
 
-# ── Gemini clients (all available keys) ───────────────────────────────────────
+QUOTA_ERRORS = ("RESOURCE_EXHAUSTED", "429", "QUOTA", "UNAVAILABLE", "PERMISSION_DENIED")
 
-def _get_all_gemini_clients():
-    """Return list of Gemini clients from all configured keys."""
+
+def _is_quota_error(e: Exception) -> bool:
+    msg = str(e).upper()
+    return any(q in msg for q in QUOTA_ERRORS)
+
+
+def _build_genai_clients(key_attrs: list[str]) -> list[tuple]:
+    """Build Gemini clients from a list of settings attribute names."""
     try:
         import google.genai as genai
     except ImportError:
         raise ImportError("google-genai not installed. Run: pip install google-genai")
 
-    key_attrs = [
-        "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5",
-        "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8",
-        "GEMINI_API_KEY", "GEMINI_API_KEY_2",
-    ]
     clients = []
     for attr in key_attrs:
         key = getattr(settings, attr, None)
@@ -144,17 +139,43 @@ def _get_all_gemini_clients():
     return clients
 
 
-def _get_text_clients():
-    """Return all available clients for text generation."""
-    return _get_all_gemini_clients()  # try all 8 keys
+# ── Stage 6 text clients (visual brief) ──────────────────────────────────────
+
+def _get_visual_brief_clients() -> list[tuple]:
+    """Keys dedicated to Stage 6 visual brief (Flash text)."""
+    clients = _build_genai_clients([
+        "GEMINI_VISUAL_KEY_1",
+        "GEMINI_VISUAL_KEY_2",
+        "GEMINI_VISUAL_KEY_3",
+    ])
+    if not clients:
+        # Fallback to legacy keys
+        logger.warning("No dedicated visual keys — falling back to legacy keys.")
+        clients = _build_genai_clients([
+            "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5",
+            "GEMINI_API_KEY_6", "GEMINI_API_KEY", "GEMINI_API_KEY_2",
+        ])
+    return clients
 
 
-QUOTA_ERRORS = ("RESOURCE_EXHAUSTED", "429", "QUOTA")
+# ── Stage 6 image clients (logos) ────────────────────────────────────────────
 
-
-def _is_quota_error(e: Exception) -> bool:
-    msg = str(e).upper()
-    return any(q in msg for q in QUOTA_ERRORS)
+def _get_logo_clients() -> list[tuple]:
+    """Keys dedicated to Stage 6 logo image generation (Flash image)."""
+    clients = _build_genai_clients([
+        "GEMINI_LOGO_KEY_1",
+        "GEMINI_LOGO_KEY_2",
+        "GEMINI_LOGO_KEY_3",
+    ])
+    if not clients:
+        # Fallback to legacy keys
+        logger.warning("No dedicated logo keys — falling back to legacy keys.")
+        clients = _build_genai_clients([
+            "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5",
+            "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8",
+            "GEMINI_API_KEY", "GEMINI_API_KEY_2",
+        ])
+    return clients
 
 
 # ── HuggingFace fallback ──────────────────────────────────────────────────────
@@ -197,7 +218,6 @@ async def _generate_visual_brief(
     core_values: list[str],
     mission: str,
 ) -> VisualIdentityOutput:
-    """Generate colors, typography, and logo seed prompt."""
 
     prompt = f"""You are a senior brand designer at Pentagram — the world's most respected branding agency.
 
@@ -238,7 +258,7 @@ Return ONLY valid JSON — no markdown, no explanation:
   "logo_negative_prompt": "elements that would make this logo wrong for the brand"
 }}"""
 
-    text_clients = _get_text_clients()
+    text_clients = _get_visual_brief_clients()
     last_error = None
 
     for client, label in text_clients:
@@ -255,10 +275,10 @@ Return ONLY valid JSON — no markdown, no explanation:
             logger.warning(f"Gemini {label} failed for visual brief: {e}")
             last_error = e
 
-    raise RuntimeError(f"All Gemini clients failed for visual brief: {last_error}")
+    raise RuntimeError(f"All Gemini visual clients failed for visual brief: {last_error}")
 
 
-# ── Step 2: Logo concepts (Divide Labor) ─────────────────────────────────────
+# ── Step 2: Logo concepts ─────────────────────────────────────────────────────
 
 async def _generate_logo_concepts(
     brand_name: str,
@@ -267,12 +287,6 @@ async def _generate_logo_concepts(
     personality_traits: list[str],
     client,
 ) -> list[dict]:
-    """
-    Principle 5 — Divide Labor:
-    LLM generates 3 brand-specific logo concept descriptions BEFORE image generation.
-    display_name = Franco Arabic transliteration if Arabic, otherwise same as brand_name.
-    """
-
     text_rule = (
         f"CRITICAL TEXT RULE: Every logo concept MUST include the display name spelled EXACTLY as: '{display_name}'\n"
         f"Letter by letter: {_spell_out(display_name)}\n"
@@ -295,17 +309,7 @@ LOGO SEED: {visual_output.logo_prompt}
 
 {text_rule}
 
-PRINCIPLE 1 — GIVE DIRECTION:
-Each concept must reflect this brand's specific personality. A defiant fintech brand should not look like a luxury spa. Let the personality drive every design decision.
-
-PRINCIPLE 3 — PROVIDE EXAMPLES:
-For each concept, name a real-world logo that shares the same design DNA (e.g., 'similar compositional clarity to the Stripe wordmark').
-
-PRINCIPLE 4 — EVALUATE QUALITY:
-In each concept's image_generation_prompt, explicitly state what would make this logo fail for this specific brand.
-
-Generate 3 COMPLETELY DIFFERENT logo concepts. Approaches to choose from (pick 3 different ones):
-wordmark, lettermark, icon+wordmark, abstract_symbol, monogram, pictorial_mark, emblem
+Generate 3 COMPLETELY DIFFERENT logo concepts. Approaches: wordmark, lettermark, icon+wordmark, abstract_symbol, monogram, pictorial_mark, emblem
 
 Return ONLY valid JSON array:
 [
@@ -329,15 +333,15 @@ Return ONLY valid JSON array:
         return concepts[:3]
     except Exception as e:
         logger.warning(f"Logo concept generation failed: {e}. Using seed prompt fallback.")
-        # Fallback: 3 simple variants of the seed prompt
         return [
             {"concept_name": f"Concept {i+1}", "approach": "icon_wordmark",
-             "image_generation_prompt": visual_output.logo_prompt}
+             "image_generation_prompt": visual_output.logo_prompt,
+             "real_world_reference": "modern brand design"}
             for i in range(3)
         ]
 
 
-# ── Step 3: Build final image prompt (Give Direction + Specify Format) ────────
+# ── Step 3: Build image prompt ────────────────────────────────────────────────
 
 def _build_image_prompt(
     brand_name: str,
@@ -345,12 +349,6 @@ def _build_image_prompt(
     concept: dict,
     visual_output: VisualIdentityOutput,
 ) -> tuple[str, str]:
-    """
-    Principle 1 — Give Direction: brand personality drives visual choices
-    Principle 2 — Specify Format: exact constraints for clean logo output
-    Principle 4 — Evaluate Quality: explicit negative prompt
-    display_name = Franco Arabic if Arabic brand, otherwise same as brand_name.
-    """
     base_prompt = concept.get("image_generation_prompt", visual_output.logo_prompt)
     primary_hex = visual_output.colors[0].hex
     secondary_hex = visual_output.colors[1].hex
@@ -377,19 +375,17 @@ def _build_image_prompt(
     return positive, negative
 
 
-# ── Step 4: Generate image (all 8 Gemini keys → HuggingFace fallback) ────────
+# ── Step 4: Generate single logo ─────────────────────────────────────────────
 
 async def _generate_single_logo(
     positive_prompt: str,
     negative_prompt: str,
     filepath: Path,
-    all_image_clients: list,
+    logo_clients: list,
     concept_num: int,
     total: int,
 ) -> bool:
-    """Try all Gemini image clients in order, then HuggingFace."""
-
-    for client, label in all_image_clients:
+    for client, label in logo_clients:
         try:
             logger.info(f"Generating logo {concept_num}/{total} with Gemini image ({label}).")
             response = await asyncio.to_thread(
@@ -414,7 +410,6 @@ async def _generate_single_logo(
             await asyncio.sleep(10)
             continue
 
-    # HuggingFace fallback
     logger.info(f"All Gemini image keys exhausted for logo {concept_num} — trying HuggingFace FLUX...")
     return await _generate_logo_huggingface(positive_prompt, filepath)
 
@@ -430,28 +425,19 @@ async def _generate_logo_images(
 ) -> list[str]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    is_arabic = _has_arabic(brand_name)
+    # Get clients for text (concept generation) and image (logo rendering)
+    text_clients = _get_visual_brief_clients()
+    logo_clients = _get_logo_clients()
 
-    # If Arabic: get Franco Arabic transliteration for logo text
-    if is_arabic:
-        text_client = all_clients[0][0] if all_clients else None
-        if text_client:
-            display_name = await _get_franco_arabic(brand_name, text_client)
-        else:
-            display_name = brand_name
+    is_arabic = _has_arabic(brand_name)
+    if is_arabic and text_clients:
+        display_name = await _get_franco_arabic(brand_name, text_clients[0][0])
         logger.info(f"Arabic brand name '{brand_name}' → using Franco Arabic '{display_name}' in logos.")
     else:
         display_name = brand_name
 
-    all_clients = _get_all_gemini_clients()
-    if not all_clients:
-        logger.warning("No Gemini clients available. Falling back to HuggingFace for all logos.")
-        all_image_clients = []
-    else:
-        all_image_clients = all_clients
-
-    # Step 2 — Divide Labor: generate brand-specific concepts
-    concept_client = all_clients[0][0] if all_clients else None
+    # Step 2 — Generate brand-specific concept descriptions
+    concept_client = text_clients[0][0] if text_clients else None
     if concept_client:
         concepts = await _generate_logo_concepts(
             brand_name=brand_name,
@@ -474,7 +460,6 @@ async def _generate_logo_images(
         safe_name = brand_name.lower().replace(" ", "_")
         filepath = output_dir / f"logo_concept_{i+1}_{safe_name}.png"
 
-        # Step 3 — Build prompt applying Give Direction + Specify Format
         positive_prompt, negative_prompt = _build_image_prompt(
             brand_name=brand_name,
             display_name=display_name,
@@ -484,12 +469,11 @@ async def _generate_logo_images(
 
         logger.info(f"Logo {i+1} concept: {concept.get('concept_name', '')} ({concept.get('approach', '')})")
 
-        # Step 4 — Generate
         success = await _generate_single_logo(
             positive_prompt=positive_prompt,
             negative_prompt=negative_prompt,
             filepath=filepath,
-            all_image_clients=all_image_clients,
+            logo_clients=logo_clients,
             concept_num=i + 1,
             total=num_images,
         )

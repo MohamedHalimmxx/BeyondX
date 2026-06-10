@@ -1,12 +1,13 @@
 """Brand Book Agent — Stage 7
 
-Rotation strategy:
-  - Try gemini-2.5-pro on each key in order (keys 3, 4, 5, 1, 2)
-  - If a key hits quota (429) move to the next key
-  - If all Pro keys exhausted, fall back to gemini-2.5-flash on each key
-  - Raises only if everything is exhausted
+Uses dedicated GEMINI_BRAND_BOOK_KEY_1/2/3/4 keys exclusively.
+These keys are separate from Stage 6 keys so Pro quota is never
+competed with visual brief or logo generation.
 
-This gives up to 5 x 25 = 125 Pro brand book generations per day for free.
+Rotation strategy:
+  Pass 1: try gemini-2.5-pro on all 4 brand book keys
+  Pass 2: fallback to gemini-2.5-flash on all 4 brand book keys
+  Raises only if everything exhausted.
 """
 
 import logging
@@ -15,30 +16,40 @@ from config.settings import settings
 
 logger = logging.getLogger("research_agent.agents.brand_book_agent")
 
-QUOTA_ERRORS = ("RESOURCE_EXHAUSTED", "429", "quota")
-
 
 def _is_quota_error(e: Exception) -> bool:
     msg = str(e).upper()
     return any(q in msg for q in ("RESOURCE_EXHAUSTED", "429", "QUOTA"))
 
 
-def _get_all_keys() -> list[tuple[str, str]]:
+def _get_brand_book_keys() -> list[tuple[str, str]]:
+    """Return dedicated brand book keys only."""
     key_map = [
-        (settings.GEMINI_API_KEY_3, "key3"),
-        (settings.GEMINI_API_KEY_4, "key4"),
-        (settings.GEMINI_API_KEY_5, "key5"),
-        (getattr(settings, "GEMINI_API_KEY_6", None), "key6"),
-        (getattr(settings, "GEMINI_API_KEY_7", None), "key7"),
-        (getattr(settings, "GEMINI_API_KEY_8", None), "key8"),
-        (settings.GEMINI_API_KEY, "key1"),
-        (settings.GEMINI_API_KEY_2, "key2"),
+        (getattr(settings, "GEMINI_BRAND_BOOK_KEY_1", None), "brand_book_1"),
+        (getattr(settings, "GEMINI_BRAND_BOOK_KEY_2", None), "brand_book_2"),
+        (getattr(settings, "GEMINI_BRAND_BOOK_KEY_3", None), "brand_book_3"),
+        (getattr(settings, "GEMINI_BRAND_BOOK_KEY_4", None), "brand_book_4"),
     ]
-    return [
+    keys = [
         (k.get_secret_value(), label)
         for k, label in key_map
         if k is not None
     ]
+    if not keys:
+        # Fallback to legacy keys if dedicated ones not set
+        logger.warning("No dedicated brand book keys found — falling back to legacy Gemini keys.")
+        legacy_map = [
+            (getattr(settings, "GEMINI_API_KEY_3", None), "key3"),
+            (getattr(settings, "GEMINI_API_KEY_4", None), "key4"),
+            (getattr(settings, "GEMINI_API_KEY_5", None), "key5"),
+            (getattr(settings, "GEMINI_API_KEY_6", None), "key6"),
+            (getattr(settings, "GEMINI_API_KEY_7", None), "key7"),
+            (getattr(settings, "GEMINI_API_KEY_8", None), "key8"),
+            (getattr(settings, "GEMINI_API_KEY", None), "key1"),
+            (getattr(settings, "GEMINI_API_KEY_2", None), "key2"),
+        ]
+        keys = [(k.get_secret_value(), label) for k, label in legacy_map if k is not None]
+    return keys
 
 
 def _build_llm(key_value: str, model: str) -> ChatGoogleGenerativeAI:
@@ -64,9 +75,9 @@ async def _try_generate(llm, brand_name, identity, analysis, strategy, naming, v
 
 class BrandBookAgent:
     def __init__(self):
-        self.keys = _get_all_keys()
+        self.keys = _get_brand_book_keys()
         if not self.keys:
-            raise RuntimeError("No Gemini API keys configured.")
+            raise RuntimeError("No Gemini brand book keys configured.")
         logger.info(f"Initializing Brand Book Agent ({len(self.keys)} keys available).")
 
     async def generate(
@@ -82,10 +93,10 @@ class BrandBookAgent:
     ) -> str:
         logger.info(f"Brand Book Agent: generating for '{brand_name}'.")
 
-        pro_model = settings.GEMINI_MODEL_PRO    # gemini-2.5-pro
+        pro_model   = settings.GEMINI_MODEL_PRO  # gemini-2.5-pro
         flash_model = settings.GEMINI_MODEL       # gemini-2.5-flash
 
-        # Pass 1: try Pro on every key
+        # Pass 1: try Pro on every brand book key
         for key_value, label in self.keys:
             try:
                 llm = _build_llm(key_value, pro_model)
@@ -97,12 +108,11 @@ class BrandBookAgent:
                 if _is_quota_error(e):
                     logger.warning(f"{pro_model} ({label}) quota exhausted. Trying next key.")
                     continue
-                # Non-quota error — re-raise immediately
                 raise
 
         logger.warning(f"All {pro_model} keys exhausted. Falling back to {flash_model}.")
 
-        # Pass 2: try Flash on every key
+        # Pass 2: try Flash on every brand book key
         for key_value, label in self.keys:
             try:
                 llm = _build_llm(key_value, flash_model)
@@ -117,6 +127,6 @@ class BrandBookAgent:
                 raise
 
         raise RuntimeError(
-            "Brand book generation failed — all Gemini Pro and Flash keys are quota-exhausted. "
-            "Try again tomorrow or add more API keys."
+            "Brand book generation failed — all brand book keys exhausted. "
+            "Try again tomorrow or add more GEMINI_BRAND_BOOK_KEY_* keys."
         )

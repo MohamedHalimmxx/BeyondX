@@ -7,7 +7,7 @@ class AppSettings(BaseSettings):
     """System-wide configuration registry validating active environment configurations."""
 
     # ── Original Groq keys (kept for backward compatibility) ──────────────
-    GROQ_API_KEY: SecretStr = Field(..., description="Primary Groq API key.")
+    GROQ_API_KEY: SecretStr = Field(...)
     GROQ_API_KEY_2: Optional[SecretStr] = Field(default=None)
     GROQ_API_KEY_3: Optional[SecretStr] = Field(default=None)
 
@@ -23,7 +23,23 @@ class AppSettings(BaseSettings):
     GROQ_NAMING_KEY: Optional[SecretStr] = Field(default=None)
     GROQ_BRAND_IDENTITY_KEY: Optional[SecretStr] = Field(default=None)
 
-    # ── Gemini keys ───────────────────────────────────────────────────────
+    # ── Gemini keys — Stage 6 visual brief (Flash text) ──────────────────
+    GEMINI_VISUAL_KEY_1: Optional[SecretStr] = Field(default=None)
+    GEMINI_VISUAL_KEY_2: Optional[SecretStr] = Field(default=None)
+    GEMINI_VISUAL_KEY_3: Optional[SecretStr] = Field(default=None)
+
+    # ── Gemini keys — Stage 6 logo generation (Flash image) ──────────────
+    GEMINI_LOGO_KEY_1: Optional[SecretStr] = Field(default=None)
+    GEMINI_LOGO_KEY_2: Optional[SecretStr] = Field(default=None)
+    GEMINI_LOGO_KEY_3: Optional[SecretStr] = Field(default=None)
+
+    # ── Gemini keys — Stage 7 brand book (Pro → Flash fallback) ──────────
+    GEMINI_BRAND_BOOK_KEY_1: Optional[SecretStr] = Field(default=None)
+    GEMINI_BRAND_BOOK_KEY_2: Optional[SecretStr] = Field(default=None)
+    GEMINI_BRAND_BOOK_KEY_3: Optional[SecretStr] = Field(default=None)
+    GEMINI_BRAND_BOOK_KEY_4: Optional[SecretStr] = Field(default=None)
+
+    # ── Legacy Gemini keys (kept for backward compat) ─────────────────────
     GEMINI_API_KEY: Optional[SecretStr] = Field(default=None)
     GEMINI_API_KEY_2: Optional[SecretStr] = Field(default=None)
     GEMINI_API_KEY_3: Optional[SecretStr] = Field(default=None)
