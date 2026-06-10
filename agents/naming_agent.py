@@ -2,17 +2,16 @@ import logging
 from groq import RateLimitError
 from openai import RateLimitError as CerebrasRateLimitError
 import asyncio
-from config.llm_factory import build_groq, get_fallback_llm
-from config.settings import settings
+from config.llm_factory import get_naming_llm, get_fallback_llm
 from nodes.naming_node import naming_node
 
 logger = logging.getLogger("research_agent.agents.naming_agent")
-ALL_EXHAUSTED_MSG = "\n\n⚠️  All LLM providers exhausted (Groq key 1, Groq key 2, Cerebras).\n   Please wait a few minutes and run again.\n"
+ALL_EXHAUSTED_MSG = "\n\n⚠️  All LLM providers exhausted.\n   Please wait a few minutes and run again.\n"
 
 class BrandNamingAgent:
     def __init__(self):
         logger.info("Initializing Brand Naming Agent.")
-        self.llm = build_groq(api_key=settings.GROQ_API_KEY.get_secret_value(), temperature=0.7)
+        self.llm = get_naming_llm(temperature=0.7)
 
     async def generate_names(self, idea, positioning_statement, analysis, brand_brief):
         async def run(llm):

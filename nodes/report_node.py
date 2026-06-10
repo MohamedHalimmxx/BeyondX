@@ -5,7 +5,6 @@ from groq import RateLimitError
 from openai import RateLimitError as CerebrasRateLimitError
 import asyncio
 
-from config.llm_factory import get_fallback_llm
 from prompts.research_prompt import REPORT_SYNTHESIS_SYSTEM_PROMPT, REPORT_SYNTHESIS_HUMAN_TEMPLATE
 from state.research_state import ResearchState
 
@@ -13,7 +12,6 @@ logger = logging.getLogger("research_agent.nodes.report_node")
 
 ALL_EXHAUSTED_MSG = (
     "\n\n⚠️  All LLM providers are currently rate-limited or overloaded.\n"
-    "   (Groq key 1, Groq key 2, Cerebras)\n"
     "   Please wait a few minutes and run again.\n"
 )
 
@@ -26,10 +24,9 @@ async def report_node(state: ResearchState, config: dict[str, Any]) -> dict[str,
         raise KeyError("Critical dependency missing: 'llm' not found in runtime config.")
 
     idea = state.get("idea", "")
-    insights = state.get("insights", [])[:30]  # cap at 30 insights
+    insights = state.get("insights", [])[:30]
     gathered_data = state.get("gathered_data", [])
 
-    # Truncate raw data to avoid exceeding Groq's 12k TPM context limit
     raw_data_text = "\n\n".join(gathered_data)
     if len(raw_data_text) > 6000:
         raw_data_text = raw_data_text[:6000] + "\n[... truncated for context limit ...]"
@@ -64,13 +61,14 @@ async def report_node(state: ResearchState, config: dict[str, Any]) -> dict[str,
         logger.info(f"Report Node compiled final document. Length: {len(report_content)} characters.")
     except RateLimitError as e:
         if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
-            logger.warning("Report Node: primary LLM rate limited. Switching to fallback.")
+            logger.warning("Report Node: primary LLM rate limited. Switching to dedicated report key.")
+            from config.llm_factory import get_report_llm
             try:
-                report_content = await invoke(get_fallback_llm())
-                logger.info(f"Report Node compiled via fallback. Length: {len(report_content)} characters.")
+                report_content = await invoke(get_report_llm())
+                logger.info(f"Report Node compiled via report key. Length: {len(report_content)} characters.")
             except RateLimitError as e2:
                 if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
-                    logger.warning("Report Node: both Groq keys exhausted. Switching to Cerebras.")
+                    logger.warning("Report Node: report key exhausted. Switching to Cerebras.")
                     report_content = await try_cerebras()
                     logger.info(f"Report Node compiled via Cerebras. Length: {len(report_content)} characters.")
                 else:

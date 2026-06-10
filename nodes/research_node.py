@@ -14,7 +14,7 @@ from state.research_state import ResearchState
 from tools.search_tool import MarketSearchTool
 from tools.competitor_tool import find_local_competitors
 from tools.market_report_tool import MarketReportTool
-from config.llm_factory import get_fallback_llm, get_primary_llm
+from config.llm_factory import get_research_node_llm, get_fallback_llm
 
 logger = logging.getLogger("research_agent.nodes.research_node")
 
@@ -24,7 +24,7 @@ class IdeaContext(BaseModel):
     location: Optional[str] = Field(default=None, description="City or country only if explicitly mentioned. Never invent.")
     is_competitor_question: bool = Field(..., description="True if asking about competitors or market players.")
     is_market_size_question: bool = Field(..., description="True if asking about market size, growth, CAGR.")
-    has_physical_location: bool = Field(..., description="True if this business operates from a physical location customers visit (restaurant, gym, clinic, store). False if it is a digital product, app, platform, or online service.")
+    has_physical_location: bool = Field(..., description="True if this business operates from a physical location customers visit (restaurant, gym,clinic, store). False if it is a digital product, app, platform, or online service.")
     search_query: str = Field(..., description=(
         "The optimal web search query to find relevant competitors or market data for this specific question. "
         "Think carefully: what search query would a researcher actually type to find LOCAL or REGIONAL results "
@@ -46,13 +46,11 @@ class DistilledInsightsOutput(BaseModel):
 
 ALL_EXHAUSTED_MSG = (
     "\n\n⚠️  All LLM providers are currently rate-limited or overloaded.\n"
-    "   (Groq key 1, Groq key 2, Cerebras)\n"
     "   Please wait a few minutes and run again.\n"
 )
 
 
 async def _try_with_cerebras(coro_fn, *args, **kwargs):
-    """Try a coroutine with Cerebras, retrying up to 3 times on queue errors."""
     from config.llm_factory import get_cerebras_llm
     cerebras = get_cerebras_llm()
     for attempt in range(3):
@@ -95,7 +93,6 @@ async def extract_idea_context(idea: str, question: str) -> IdeaContext:
     async def run(active_llm):
         response = await active_llm.ainvoke(messages)
         raw = response.content.replace("```json", "").replace("```", "").strip()
-        # Find the first { and last } to extract just the JSON object
         start = raw.find("{")
         end = raw.rfind("}") + 1
         if start == -1 or end == 0:
@@ -104,7 +101,6 @@ async def extract_idea_context(idea: str, question: str) -> IdeaContext:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            # Strip markdown fences and retry
             cleaned = raw.replace("```json", "").replace("```", "").strip()
             start = cleaned.find("{")
             end = cleaned.rfind("}") + 1
@@ -113,7 +109,7 @@ async def extract_idea_context(idea: str, question: str) -> IdeaContext:
             data = json.loads(cleaned[start:end])
         return IdeaContext(**data)
 
-    llm = get_primary_llm()
+    llm = get_research_node_llm()
     try:
         return await run(llm)
     except (RateLimitError, ValueError) as e:
@@ -123,6 +119,7 @@ async def extract_idea_context(idea: str, question: str) -> IdeaContext:
         except (RateLimitError, ValueError) as e2:
             logger.warning(f"Context extraction fallback failed: {str(e2)[:60]}. Switching to Cerebras.")
             return await _try_with_cerebras(run)
+
 
 async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[str, Any]:
     logger.info("Executing Research Node: Commencing data collection cycle.")
@@ -160,7 +157,6 @@ async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[st
             logger.info(f"Routing to Tavily web search with LLM-generated query: '{context.search_query}'")
             search_tool = MarketSearchTool()
             raw_search_dump = await search_tool.run_async(query=context.search_query)
-
     elif context.is_market_size_question:
         logger.info(f"Routing to market report tool with LLM-generated query: '{context.search_query}'")
         report_tool = MarketReportTool()
@@ -189,9 +185,8 @@ async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[st
         return {
             "gathered_data": [f"Question: {target_question}\n{raw_search_dump}"],
             "insights": distilled.findings,
-            "iteration": current_idx + 1
+            "iteration": current_idx + 1,
         }
-
     except RateLimitError as e:
         if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
             logger.warning("Research extraction: primary LLM rate limited. Switching to fallback.")
@@ -202,7 +197,7 @@ async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[st
                 return {
                     "gathered_data": [f"Question: {target_question}\n{raw_search_dump}"],
                     "insights": distilled.findings,
-                    "iteration": current_idx + 1
+                    "iteration": current_idx + 1,
                 }
             except RateLimitError as e2:
                 if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
@@ -212,11 +207,10 @@ async def research_node(state: ResearchState, config: dict[str, Any]) -> dict[st
                     return {
                         "gathered_data": [f"Question: {target_question}\n{raw_search_dump}"],
                         "insights": distilled.findings,
-                        "iteration": current_idx + 1
+                        "iteration": current_idx + 1,
                     }
                 raise
         raise
-
     except Exception as exc:
         logger.error(f"Research node error: {str(exc)}", exc_info=True)
         raise

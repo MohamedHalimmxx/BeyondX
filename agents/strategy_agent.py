@@ -3,20 +3,18 @@ from typing import Any, Tuple
 from groq import RateLimitError
 from openai import RateLimitError as CerebrasRateLimitError
 import asyncio
-from config.llm_factory import build_groq, get_fallback_llm
-from config.settings import settings
+from config.llm_factory import get_strategy_llm, get_fallback_llm
 from nodes.strategy_node import strategy_node
 
 logger = logging.getLogger("research_agent.agents.strategy_agent")
-ALL_EXHAUSTED_MSG = "\n\n⚠️  All LLM providers exhausted (Groq key 1, Groq key 2, Cerebras).\n   Please wait a few minutes and run again.\n"
+ALL_EXHAUSTED_MSG = "\n\n⚠️  All LLM providers exhausted.\n   Please wait a few minutes and run again.\n"
 
 class StrategyWriterAgent:
     def __init__(self):
         logger.info("Initializing stand-alone Strategy Writer execution context.")
-        self.llm = build_groq(api_key=settings.GROQ_API_KEY.get_secret_value(), temperature=0.3)
+        self.llm = get_strategy_llm(temperature=0.3)
 
     async def generate_plan(self, research_state: dict[str, Any]) -> Tuple[str, Any]:
-        """Returns (markdown_string, StrategicGoToMarketPlan)."""
         async def run(llm):
             config = {"configurable": {"llm": llm}}
             result_state = await strategy_node(state=research_state, config=config)

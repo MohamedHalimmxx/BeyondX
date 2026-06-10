@@ -13,7 +13,6 @@ logger = logging.getLogger("research_agent.nodes.planner_node")
 
 ALL_EXHAUSTED_MSG = (
     "\n\n⚠️  All LLM providers are currently rate-limited or overloaded.\n"
-    "   (Groq key 1, Groq key 2, Cerebras)\n"
     "   Please wait a few minutes and run again.\n"
 )
 
@@ -63,13 +62,13 @@ async def planner_node(state: ResearchState, config: dict[str, Any]) -> dict[str
         questions = await run_planner(llm)
     except RateLimitError as e:
         if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
-            logger.warning("Planner Node: primary LLM exhausted. Switching to fallback.")
-            from config.llm_factory import get_fallback_llm
+            logger.warning("Planner Node: primary LLM exhausted. Switching to dedicated planner key.")
+            from config.llm_factory import get_planner_llm
             try:
-                questions = await run_planner(get_fallback_llm())
+                questions = await run_planner(get_planner_llm())
             except RateLimitError as e2:
                 if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
-                    logger.warning("Planner Node: both Groq keys exhausted. Switching to Cerebras.")
+                    logger.warning("Planner Node: planner key exhausted. Switching to Cerebras.")
                     questions = await try_cerebras()
                 else:
                     raise

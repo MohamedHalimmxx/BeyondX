@@ -2,17 +2,16 @@ import logging
 from groq import RateLimitError
 from openai import RateLimitError as CerebrasRateLimitError
 import asyncio
-from config.settings import settings
-from config.llm_factory import build_groq, get_fallback_llm
+from config.llm_factory import get_analyst_llm, get_fallback_llm
 from nodes.analyst_node import analyst_node
 
 logger = logging.getLogger("research_agent.agents.analyst_agent")
-ALL_EXHAUSTED_MSG = "\n\n⚠️  All LLM providers exhausted (Groq key 1, Groq key 2, Cerebras).\n   Please wait a few minutes and run again.\n"
+ALL_EXHAUSTED_MSG = "\n\n⚠️  All LLM providers exhausted.\n   Please wait a few minutes and run again.\n"
 
 class BrandAnalystAgent:
     def __init__(self):
         logger.info("Initializing Brand Analyst Agent.")
-        self.llm = build_groq(api_key=settings.GROQ_API_KEY.get_secret_value(), temperature=0.2)
+        self.llm = get_analyst_llm(temperature=0.2)
 
     async def execute_analysis(self, idea, research_report, insights):
         async def run(llm):

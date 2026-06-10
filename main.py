@@ -361,6 +361,8 @@ def _run_brandgenius() -> None:
 
             print("\n" + "=" * 70)
             print("Operation completed successfully.")
+            print("\n[TESTING STAGES 1-5 ONLY — EARLY EXIT]")
+            return
 
             # ── Stage 6 — Visual Identity ─────────────────────────────────
             visual = None

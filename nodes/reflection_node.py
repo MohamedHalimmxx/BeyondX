@@ -5,7 +5,6 @@ from groq import RateLimitError
 from openai import RateLimitError as CerebrasRateLimitError
 import asyncio
 
-from config.llm_factory import get_fallback_llm
 from prompts.research_prompt import REFLECTION_SYSTEM_PROMPT, REFLECTION_HUMAN_TEMPLATE
 from state.research_state import ResearchState, ReflectionVerdict
 
@@ -13,7 +12,6 @@ logger = logging.getLogger("research_agent.nodes.reflection_node")
 
 ALL_EXHAUSTED_MSG = (
     "\n\n⚠️  All LLM providers are currently rate-limited or overloaded.\n"
-    "   (Groq key 1, Groq key 2, Cerebras)\n"
     "   Please wait a few minutes and run again.\n"
 )
 
@@ -68,12 +66,13 @@ async def reflection_node(state: ResearchState, config: dict[str, Any]) -> dict[
         verdict = await invoke(llm)
     except RateLimitError as e:
         if "tokens per day" in str(e) or "rate_limit_exceeded" in str(e):
-            logger.warning("Reflection Node: primary LLM rate limited. Switching to fallback.")
+            logger.warning("Reflection Node: primary LLM rate limited. Switching to dedicated reflection key.")
+            from config.llm_factory import get_reflection_llm
             try:
-                verdict = await invoke(get_fallback_llm())
+                verdict = await invoke(get_reflection_llm())
             except RateLimitError as e2:
                 if "tokens per day" in str(e2) or "rate_limit_exceeded" in str(e2):
-                    logger.warning("Reflection Node: both Groq keys exhausted. Switching to Cerebras.")
+                    logger.warning("Reflection Node: reflection key exhausted. Switching to Cerebras.")
                     verdict = await try_cerebras()
                 else:
                     raise
@@ -86,6 +85,6 @@ async def reflection_node(state: ResearchState, config: dict[str, Any]) -> dict[
         "reflection_reasoning": verdict.reasoning,
         "reflection_verdict": {
             "is_complete": verdict.is_complete,
-            "reasoning": verdict.reasoning
-        }
+            "reasoning": verdict.reasoning,
+        },
     }
