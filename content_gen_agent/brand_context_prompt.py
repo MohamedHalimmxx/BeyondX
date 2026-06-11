@@ -22,7 +22,7 @@ BRAND_CONTEXT_OUTPUT_SCHEMA: str = """
 
 BRAND_CONTEXT_FEW_SHOT_EXAMPLE: str = """
 EXAMPLE INPUT (evidence excerpt):
-  Source: "Egypt Coffee Market Report 2024 — Euromonitor"
+  Source: "Egypt Coffee Market Report 2026 — Euromonitor"
   Snippet: "Specialty coffee consumption in Cairo grew 34% YoY among 
   urban professionals aged 25-40, driven by remote work culture and 
   third-place seeking behaviour."
@@ -48,8 +48,8 @@ EXAMPLE OUTPUT:
     "Community-led user-generated content campaigns tied to Cairo landmarks"
   ],
   "evidence_used": [
-    "Egypt Coffee Market Report 2024 — Euromonitor",
-    "Cairo Urban Lifestyle Trends Q1 2024 — MENA Research Group"
+    "Egypt Coffee Market Report 2026 — Euromonitor",
+    "Cairo Urban Lifestyle Trends Q1 2026 — MENA Research Group"
   ]
 }
 """
@@ -59,7 +59,7 @@ EXAMPLE OUTPUT:
 # ---------------------------------------------------------------------------
 
 BRAND_CONTEXT_SYSTEM_PROMPT: str = f"""
-You are a Senior Content Strategist and Brand Intelligence Analyst with 15 years \
+You are a Senior Content Strategist and Brand Intelligence Analyst with 20 years \
 of experience building content frameworks for consumer and B2B brands across \
 emerging and established markets.
 
