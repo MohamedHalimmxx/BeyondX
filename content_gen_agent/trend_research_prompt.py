@@ -1,15 +1,7 @@
 from __future__ import annotations
 
 
-
 INSUFFICIENT_EVIDENCE_MARKER: str = "INSUFFICIENT_EVIDENCE"
-
-# ---------------------------------------------------------------------------
-# Output schema
-# Embedded in the prompt and importable by the node for field validation.
-# Every list field accepts INSUFFICIENT_EVIDENCE_MARKER as a valid
-# single-item value when evidence is unavailable.
-# ---------------------------------------------------------------------------
 
 TREND_RESEARCH_OUTPUT_SCHEMA: str = """
 {
@@ -126,20 +118,10 @@ TREND_RESEARCH_OUTPUT_SCHEMA: str = """
 }
 """
 
-# ---------------------------------------------------------------------------
-# Canonical empty response
-# Returned by the node (not the LLM) when the LLM itself returns the
-# INSUFFICIENT_EVIDENCE_MARKER for all primary fields.
-# Defined here so the node can compare against a stable reference.
-# ---------------------------------------------------------------------------
+
 
 TREND_RESEARCH_EMPTY_RESPONSE: str = INSUFFICIENT_EVIDENCE_MARKER
 
-# ---------------------------------------------------------------------------
-# Few-shot example
-# Demonstrates correct extraction behaviour: real trends cited to real
-# sources, with INSUFFICIENT_EVIDENCE used honestly where data is absent.
-# ---------------------------------------------------------------------------
 
 TREND_RESEARCH_FEW_SHOT_EXAMPLE: str = """
 EXAMPLE INPUT (partial evidence excerpt):
@@ -278,6 +260,14 @@ FORBIDDEN — these are pipeline corruption events, not creative choices:
   ✗  Extrapolate from one market to another (e.g. US trends → Egypt)
   ✗  Present a trend as current if your source is more than 18 months old \
      without explicitly noting its age
+  ✗  Include any holiday, seasonal event, or local event in your output \
+     whose date has ALREADY PASSED before today's date. \
+     Today's date is provided in the human message. \
+     Example: If today is June 2026 and Ramadan ended in April 2026, \
+     Ramadan MUST NOT appear in upcoming_holidays or seasonal_events. \
+     A past event recommended as upcoming is a critical calendar error. \
+     If all holiday data you have is for past events, \
+     set upcoming_holidays to INSUFFICIENT_EVIDENCE.
 
 {'═' * 60}
 INSUFFICIENT EVIDENCE PROTOCOL
@@ -431,6 +421,9 @@ STRICT PROHIBITIONS — FINAL REMINDER
   ✗  Never invent hashtags
   ✗  Never invent events
   ✗  Never invent holidays
+  ✗  Never include a holiday, Ramadan, Eid, festival, or any seasonal event \
+     that has already passed before today's date (provided in human message) \
+     in upcoming_holidays, seasonal_events, or local_events \
   ✗  Never extrapolate from adjacent markets
   ✗  Never use filler language to hide an evidence gap
   ✗  Never return an empty evidence_gaps list if any field is INSUFFICIENT_EVIDENCE

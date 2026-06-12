@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -25,22 +25,17 @@ logger = logging.getLogger(__name__)
 
 NODE_NAME: str = "trend_research_node"
 
-# Primary model. llama-3.3-70b-versatile on Groq free tier has a
-# 12,000 TPM (tokens-per-minute) limit, which is tight when the system
-# prompt is large. llama-3.1-8b-instant has a 20,000 TPM limit and is
-# used as the automatic fallback when a 413 is received.
 GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-GROQ_FALLBACK_MODEL: str = os.getenv("GROQ_FALLBACK_MODEL", "llama-3.1-8b-instant")
 
 # Tavily configuration — higher result count than brand context because
 # trend research needs broader evidence coverage across 11 categories
-TAVILY_MAX_RESULTS_PER_QUERY: int = 5
+TAVILY_MAX_RESULTS_PER_QUERY: int = 3
 TAVILY_SEARCH_DEPTH: str = "advanced"
 
 # LLM parameters — slightly higher temperature than brand context to
 # allow nuanced synthesis across diverse evidence, still heavily constrained
 LLM_TEMPERATURE: float = 0.1
-LLM_MAX_TOKENS: int = 4096
+LLM_MAX_TOKENS: int = 2500
 
 # Minimum raw Tavily results required before calling the LLM
 MIN_RAW_RESULTS: int = 2
@@ -49,33 +44,9 @@ MIN_RAW_RESULTS: int = 2
 # before accepting the response as usable
 MIN_POPULATED_CATEGORIES: int = 2
 
-# Snippet character cap per Tavily result.
-# Groq free tier: 12,000 TPM. The system prompt consumes ~7,000 tokens,
-# leaving ~5,000 for the human message + LLM output (4,096).
-# That means the human message budget is roughly 900 tokens — very tight.
-# Keeping snippets small is the primary lever to stay within budget.
-SNIPPET_MAX_CHARS: int = 180
-
-# Hard cap on how many evidence items are sent to the LLM.
-# Even with short snippets, 39 results can exceed the budget.
-# Mathematical safe max for the primary model (12,000 TPM):
-#   system_prompt ~6,500 + LLM_MAX_TOKENS 4,096 + human_msg ~1,400 = 11,996 < 12,000
-# Set to 17 to keep primary model requests safely under the TPM cap.
-# The fallback model (20,000 TPM) will handle cases where even this is tight.
-MAX_EVIDENCE_FOR_LLM: int = 17
-
-# Approximate token budget for the human message (excluding system prompt
-# and LLM output). Used by _estimate_tokens() to pre-flight the payload.
-# Groq TPM 12,000 − system_prompt_est 6,500 − LLM_MAX_TOKENS 4,096 = 1,404.
-# We use 1,200 as a conservative target with headroom.
-HUMAN_MSG_TOKEN_BUDGET: int = 1_200
-
-# Characters per token (rough universal approximation).
-CHARS_PER_TOKEN: float = 4.0
-
-# On a 413 / rate_limit_exceeded error, retry once with this fraction
-# of the original evidence set before giving up.
-RETRY_EVIDENCE_FRACTION: float = 0.5
+# Snippet character cap per Tavily result — keeps human message within
+# context window limits when many queries return many results
+SNIPPET_MAX_CHARS: int = 200
 
 
 # ---------------------------------------------------------------------------
@@ -92,16 +63,15 @@ def _get_tavily_client() -> TavilyClient:
     return TavilyClient(api_key=api_key)
 
 
-def _get_llm(model: str | None = None) -> ChatGroq:
-    """Return a ChatGroq instance for the given model (defaults to GROQ_MODEL)."""
-    api_key = os.getenv("GROQ_API_KEY6")
+def _get_llm() -> ChatGroq:
+    api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         raise EnvironmentError(
-            "GROQ_API_KEY6 environment variable is not set. "
+            "GROQ_API_KEY environment variable is not set. "
             "Trend research node cannot call the LLM without it."
         )
     return ChatGroq(
-        model=model or GROQ_MODEL,
+        model=GROQ_MODEL,
         temperature=LLM_TEMPERATURE,
         max_tokens=LLM_MAX_TOKENS,
         api_key=api_key,
@@ -141,8 +111,11 @@ def _build_search_queries(
     list[dict[str, str]]
         Each item has 'category' and 'query' keys.
     """
-    current_year = datetime.now(timezone.utc).year
+    now = datetime.now(timezone.utc)
+    current_year = now.year
     next_year = current_year + 1
+    today_str = now.strftime("%Y-%m-%d")
+    current_month = now.strftime("%B %Y")   # e.g. "June 2026"
 
     queries: list[dict[str, str]] = [
         # ── 1. Social media trends ───────────────────────────────────────
@@ -189,24 +162,26 @@ def _build_search_queries(
         {
             "category": "seasonal_events",
             "query": (
-                f"seasonal events {industry} {country} "
-                f"{current_year} {next_year}"
+                f"upcoming seasonal events {industry} {country} "
+                f"after {current_month} {next_year}"
             ),
         },
         # ── 7. Upcoming holidays ─────────────────────────────────────────
+        # Explicitly ask AFTER today so Tavily won't return holidays
+        # that have already passed (e.g. Ramadan if it ended months ago).
         {
             "category": "upcoming_holidays",
             "query": (
-                f"public holidays {country} {current_year} "
-                f"{next_year} official calendar"
+                f"upcoming public holidays {country} after {current_month} "
+                f"{current_year} {next_year} official calendar"
             ),
         },
         # ── 8. Local events ──────────────────────────────────────────────
         {
             "category": "local_events",
             "query": (
-                f"events {city} {industry} {current_year} "
-                f"{next_year} festival conference"
+                f"upcoming events {city} {industry} after {current_month} "
+                f"{current_year} {next_year} festival conference"
             ),
         },
         # ── 9. Consumer behaviour ────────────────────────────────────────
@@ -338,14 +313,42 @@ async def _retrieve_evidence(
             )
 
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[%s] Tavily search failed | category='%s' | "
-                "query='%s' | error=%s",
-                NODE_NAME,
-                category,
-                query,
-                str(exc),
+            err_str = str(exc).lower()
+            is_billing = any(
+                kw in err_str
+                for kw in ("usage limit", "quota", "billing", "upgrade", "plan")
             )
+            if is_billing:
+                logger.warning(
+                    "[%s] Tavily billing/quota limit reached | category='%s' | "
+                    "Switching to LLM-only mode for remaining queries.",
+                    NODE_NAME,
+                    category,
+                )
+                # Inject fallback sentinel and stop all remaining queries
+                if not any("TAVILY_UNAVAILABLE" in s for s in evidence_sources):
+                    evidence_sources.append(
+                        "[TAVILY_UNAVAILABLE] Tavily quota exhausted — "
+                        "trend research generated from LLM knowledge only."
+                    )
+                    raw_results.append({
+                        "category": "tavily_unavailable",
+                        "query": query,
+                        "url": "tavily_unavailable",
+                        "title": "[TAVILY_UNAVAILABLE] Tavily quota exhausted",
+                        "snippet": "Tavily search unavailable. LLM knowledge used as fallback.",
+                        "score": 0.0,
+                    })
+                break
+            else:
+                logger.warning(
+                    "[%s] Tavily search failed | category='%s' | "
+                    "query='%s' | error=%s",
+                    NODE_NAME,
+                    category,
+                    query,
+                    str(exc),
+                )
 
     logger.info(
         "[%s] Evidence retrieval complete | brand='%s' | "
@@ -359,69 +362,6 @@ async def _retrieve_evidence(
 
 
 # ---------------------------------------------------------------------------
-# Token budget utilities
-# ---------------------------------------------------------------------------
-
-def _estimate_tokens(text: str) -> int:
-    """
-    Fast character-based token estimate (1 token ≈ 4 chars).
-    Conservative enough to use as a pre-flight guard before an LLM call.
-    """
-    return max(1, int(len(text) / CHARS_PER_TOKEN))
-
-
-def _select_evidence_for_llm(
-    raw_results: list[dict[str, Any]],
-    max_items: int,
-) -> list[dict[str, Any]]:
-    """
-    Selects the top-N evidence items by Tavily relevance score while
-    preserving category diversity (at least one item per category if
-    possible).
-
-    Parameters
-    ----------
-    raw_results : list[dict]
-        All deduplicated Tavily results.
-    max_items : int
-        Hard cap on items to include.
-
-    Returns
-    -------
-    list[dict]
-        Subset of raw_results, sorted descending by score, capped at
-        max_items and guaranteed to include at least one item per
-        category (up to the cap).
-    """
-    if len(raw_results) <= max_items:
-        return raw_results
-
-    # Group by category
-    by_category: dict[str, list[dict[str, Any]]] = {}
-    for r in raw_results:
-        cat = r.get("category", "general")
-        by_category.setdefault(cat, []).append(r)
-
-    # Sort each category by score descending and take the best item first
-    selected: list[dict[str, Any]] = []
-    remainder: list[dict[str, Any]] = []
-    for items in by_category.values():
-        items_sorted = sorted(items, key=lambda x: x.get("score", 0.0), reverse=True)
-        selected.append(items_sorted[0])   # one per category guaranteed
-        remainder.extend(items_sorted[1:])
-
-    # Fill remaining slots with highest-scoring leftovers
-    remaining_slots = max_items - len(selected)
-    if remaining_slots > 0:
-        remainder_sorted = sorted(
-            remainder, key=lambda x: x.get("score", 0.0), reverse=True
-        )
-        selected.extend(remainder_sorted[:remaining_slots])
-
-    return selected[:max_items]
-
-
-# ---------------------------------------------------------------------------
 # Human message builder
 # ---------------------------------------------------------------------------
 
@@ -432,29 +372,22 @@ def _build_human_message(
     brand_name: str,
     brand_profile: dict[str, Any] | None,
     raw_results: list[dict[str, Any]],
-    max_evidence: int = MAX_EVIDENCE_FOR_LLM,
 ) -> str:
     """
     Constructs the human-turn message passed to the LLM.
 
-    Applies two token-budget controls before assembly:
-    1. Evidence is capped at `max_evidence` items (top by Tavily score,
-       with category diversity preserved).
-    2. Each snippet is hard-capped at SNIPPET_MAX_CHARS characters.
-
-    This ensures the human message stays within the token budget defined
-    by HUMAN_MSG_TOKEN_BUDGET even when Tavily returns many results.
+    Combines research parameters, brand context summary from the
+    previous node, and the full retrieved evidence block.
 
     Parameters
     ----------
     industry, country, city, brand_name : str
         Core research parameters.
     brand_profile : dict | None
-        Output of brand_context_node.
+        Output of brand_context_node. Used to enrich the research
+        context — e.g. target audience informs which trends are relevant.
     raw_results : list[dict]
         Category-tagged Tavily results from _retrieve_evidence.
-    max_evidence : int
-        Maximum evidence items to include (default MAX_EVIDENCE_FOR_LLM).
 
     Returns
     -------
@@ -463,38 +396,24 @@ def _build_human_message(
     """
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # ── Evidence selection: cap and score-rank ────────────────────────────
-    selected_results = _select_evidence_for_llm(raw_results, max_evidence)
-    dropped = len(raw_results) - len(selected_results)
-    if dropped > 0:
-        logger.debug(
-            "[%s] Evidence truncated for token budget | "
-            "kept=%d | dropped=%d | brand='%s'",
-            NODE_NAME,
-            len(selected_results),
-            dropped,
-            brand_name,
-        )
-
     # ── Brand context summary ─────────────────────────────────────────────
     if brand_profile and not brand_profile.get("_parse_error"):
-        target_audience = brand_profile.get("target_audience", "N/A")
-        brand_tone = brand_profile.get("brand_tone", "N/A")
-        cultural_context = brand_profile.get("cultural_context", "N/A")
-        content_language = brand_profile.get("content_language", "N/A")
         brand_context_block = (
             f"BRAND CONTEXT\n"
-            f"Audience: {target_audience} | Tone: {brand_tone} | "
-            f"Language: {content_language} | Culture: {cultural_context}\n"
+            f"Audience: {brand_profile.get('target_audience', 'N/A')}\n"
+            f"Tone: {brand_profile.get('brand_tone', 'N/A')}\n"
+            f"Language: {brand_profile.get('content_language', 'N/A')}\n"
         )
     else:
-        brand_context_block = (
-            "BRAND CONTEXT: Unavailable. Use industry + location only.\n"
-        )
+        brand_context_block = "BRAND CONTEXT: Not available.\n" 
 
     # ── Evidence block grouped by category ───────────────────────────────
+    # Group results by category, capped at 2 per category to keep
+    # the prompt within Groq free-tier TPM limits.
+    MAX_RESULTS_PER_CATEGORY_IN_PROMPT: int = 2
+
     results_by_category: dict[str, list[dict[str, Any]]] = {}
-    for result in selected_results:
+    for result in raw_results:
         cat = result.get("category", "general")
         results_by_category.setdefault(cat, []).append(result)
 
@@ -503,49 +422,62 @@ def _build_human_message(
 
     for category, items in results_by_category.items():
         category_label = category.replace("_", " ").upper()
-        section_lines: list[str] = [f"[{category_label}]"]
-        for item in items:
-            # Enforce snippet cap (already applied at retrieval, but
-            # enforced again here as a belt-and-suspenders guard)
-            snippet = (item.get("snippet") or "")[:SNIPPET_MAX_CHARS]
-            title = (item.get("title") or "N/A")[:80]  # cap title too
+        # Cap results per category to control prompt size
+        capped_items = items[:MAX_RESULTS_PER_CATEGORY_IN_PROMPT]
+        section_lines: list[str] = [
+            f"CATEGORY: {category_label} ({len(capped_items)}/{len(items)} sources shown)"
+        ]
+        for item in capped_items:
             section_lines.append(
-                f"  {source_counter}. {title} — {snippet}"
+                f"  [{source_counter}] {item.get('title', 'N/A')}\n"
+                f"       {item.get('snippet', 'N/A')}"
             )
             source_counter += 1
         evidence_sections.append("\n".join(section_lines))
 
     if evidence_sections:
-        evidence_block = "\n".join(evidence_sections)
+        evidence_block = "\n\n".join(evidence_sections)
     else:
         evidence_block = (
-            "NO EVIDENCE RETRIEVED. "
-            f"Mark all categories as {INSUFFICIENT_EVIDENCE_MARKER}."
+            "NO EVIDENCE RETRIEVED.\n"
+            "All research categories must be marked as "
+            f"{INSUFFICIENT_EVIDENCE_MARKER}."
         )
 
     message = (
-        f"Date:{today_str} Brand:{brand_name} Industry:{industry} "
-        f"Country:{country} City:{city}\n"
+        f"TODAY'S DATE: {today_str}\n"
+        f"{'=' * 60}\n"
+        f"RESEARCH PARAMETERS\n"
+        f"{'=' * 60}\n"
+        f"Brand Name : {brand_name}\n"
+        f"Industry   : {industry}\n"
+        f"Country    : {country}\n"
+        f"City       : {city}\n"
+        f"{'=' * 60}\n"
         f"{brand_context_block}"
-        f"EVIDENCE ({len(selected_results)} sources):\n"
+        f"{'=' * 60}\n"
+        f"RETRIEVED EVIDENCE ({len(raw_results)} total sources "
+        f"across {len(results_by_category)} categories)\n"
+        f"{'=' * 60}\n"
         f"{evidence_block}\n"
-        f"---\n"
-        f"Using ONLY the evidence above, produce the Trend Research Report "
-        f"JSON. Extract findings for all 11 categories. "
-        f"Use {INSUFFICIENT_EVIDENCE_MARKER} where evidence is absent. "
-        f"List cited sources in all_sources_used. "
-        f"Return ONLY the JSON object, no markdown, no preamble."
-    )
-
-    estimated_tokens = _estimate_tokens(message)
-    logger.debug(
-        "[%s] Human message built | brand='%s' | "
-        "evidence_items=%d | estimated_tokens=%d | budget=%d",
-        NODE_NAME,
-        brand_name,
-        len(selected_results),
-        estimated_tokens,
-        HUMAN_MSG_TOKEN_BUDGET,
+        f"{'=' * 60}\n"
+        f"INSTRUCTIONS\n"
+        f"{'=' * 60}\n"
+        f"Using ONLY the retrieved evidence above, produce the Trend "
+        f"Research Report JSON object. "
+        f"Extract findings for all 11 research categories. "
+        f"CRITICAL DATE RULE: Today is {today_str}. "
+        f"For upcoming_holidays and seasonal_events and local_events: "
+        f"ONLY include events whose date is AFTER today ({today_str}). "
+        f"If an event (e.g. Ramadan, Eid, a festival) has already passed "
+        f"before today, you MUST exclude it completely — do NOT include it "
+        f"even if the evidence mentions it. "
+        f"A past event as a campaign recommendation is a critical error. "
+        f"Use {INSUFFICIENT_EVIDENCE_MARKER} for any category where "
+        f"evidence is absent. "
+        f"List every source you cited in all_sources_used. "
+        f"Return ONLY the JSON object — no markdown, no preamble, "
+        f"no commentary."
     )
 
     return message
@@ -555,60 +487,23 @@ def _build_human_message(
 # LLM call and response parser
 # ---------------------------------------------------------------------------
 
-def _is_rate_limit_error(exc: Exception) -> bool:
-    """Returns True if the exception is a Groq 413 / TPM rate-limit error."""
-    msg = str(exc).lower()
-    return "413" in msg or "rate_limit_exceeded" in msg or "tokens per minute" in msg
-
-
-async def _invoke_llm_with_messages(
-    messages: list,
-    llm: ChatGroq,
-    brand_name: str,
-    model_label: str,
-) -> str:
-    """
-    Thin wrapper around llm.ainvoke that logs the model being used.
-    Returns raw content string.
-    """
-    logger.debug(
-        "[%s] Invoking LLM | model=%s | brand='%s'",
-        NODE_NAME,
-        model_label,
-        brand_name,
-    )
-    response = await llm.ainvoke(messages)
-    return response.content
-
-
 async def _call_llm_and_parse(
     human_message: str,
     llm: ChatGroq,
     brand_name: str,
-    raw_results: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
     Calls ChatGroq with the system + human messages and parses
     the structured JSON trend report.
 
-    Retry strategy on 413 / TPM rate-limit errors
-    -----------------------------------------------
-    1. First attempt  : primary model (GROQ_MODEL) with full evidence.
-    2. On 413         : rebuild human message with RETRY_EVIDENCE_FRACTION
-                        of the evidence (top items by score) and retry
-                        with the fallback model (GROQ_FALLBACK_MODEL).
-    3. On second 413  : give up and return an error-flagged dict.
-
     Parameters
     ----------
     human_message : str
-        Formatted message from _build_human_message (full evidence).
+        Formatted message from _build_human_message.
     llm : ChatGroq
-        Authenticated ChatGroq instance (primary model).
+        Authenticated ChatGroq instance.
     brand_name : str
         Used for log context.
-    raw_results : list[dict] | None
-        Original Tavily results — required for retry with reduced evidence.
 
     Returns
     -------
@@ -620,83 +515,15 @@ async def _call_llm_and_parse(
         HumanMessage(content=human_message),
     ]
 
-    raw_content: str = ""
+    logger.debug(
+        "[%s] Invoking LLM | model=%s | brand='%s'",
+        NODE_NAME,
+        GROQ_MODEL,
+        brand_name,
+    )
 
-    try:
-        raw_content = await _invoke_llm_with_messages(
-            messages, llm, brand_name, GROQ_MODEL
-        )
-
-    except Exception as exc:  # noqa: BLE001
-        if not _is_rate_limit_error(exc):
-            # Not a token error — re-raise so the caller handles it
-            raise
-
-        logger.warning(
-            "[%s] 413 TPM limit hit on primary model '%s' | brand='%s' | "
-            "retrying with fallback model '%s' and reduced evidence (%d%%).",
-            NODE_NAME,
-            GROQ_MODEL,
-            brand_name,
-            GROQ_FALLBACK_MODEL,
-            int(RETRY_EVIDENCE_FRACTION * 100),
-        )
-
-        # ── Retry: rebuild message with reduced evidence ─────────────────
-        if raw_results:
-            reduced_max = max(
-                1, int(len(raw_results) * RETRY_EVIDENCE_FRACTION)
-            )
-            retry_human_message = _build_human_message(
-                # We only have access to the assembled message here, so we
-                # reconstruct with reduced evidence from raw_results.
-                # Parse params from the original message header is fragile;
-                # instead pass raw_results and let the builder re-select.
-                industry="",      # not used for evidence selection
-                country="",
-                city="",
-                brand_name=brand_name,
-                brand_profile=None,
-                raw_results=raw_results,
-                max_evidence=reduced_max,
-            )
-        else:
-            # No raw_results available — pass the original message as-is
-            # but switch to the fallback model which may have higher TPM
-            retry_human_message = human_message
-
-        retry_messages = [
-            SystemMessage(content=TREND_RESEARCH_SYSTEM_PROMPT),
-            HumanMessage(content=retry_human_message),
-        ]
-        fallback_llm = _get_llm(model=GROQ_FALLBACK_MODEL)
-
-        try:
-            raw_content = await _invoke_llm_with_messages(
-                retry_messages, fallback_llm, brand_name, GROQ_FALLBACK_MODEL
-            )
-            logger.info(
-                "[%s] Fallback model succeeded | model='%s' | brand='%s'",
-                NODE_NAME,
-                GROQ_FALLBACK_MODEL,
-                brand_name,
-            )
-        except Exception as retry_exc:  # noqa: BLE001
-            logger.error(
-                "[%s] Fallback model also failed | model='%s' | "
-                "brand='%s' | error=%s",
-                NODE_NAME,
-                GROQ_FALLBACK_MODEL,
-                brand_name,
-                str(retry_exc),
-            )
-            return {
-                "_parse_error": (
-                    f"Both primary ({GROQ_MODEL}) and fallback "
-                    f"({GROQ_FALLBACK_MODEL}) models failed. "
-                    f"Last error: {str(retry_exc)}"
-                )
-            }
+    response = await llm.ainvoke(messages)
+    raw_content: str = response.content
 
     if not raw_content or not raw_content.strip():
         logger.error(
@@ -1011,20 +838,68 @@ def _extract_competitor_insights(
     return insights
 
 
+def _is_event_in_past(item: dict[str, Any]) -> bool:
+    """
+    Returns True if a holiday/event item has a date field that parses
+    to a date strictly before today. Used to filter out past events
+    that Tavily returned despite being asked for upcoming-only results.
+
+    Checks the 'date', 'date_or_period', and 'anniversary_date' fields.
+    Returns False (keep the item) when the date cannot be parsed —
+    better to include an unverifiable event than to silently drop it.
+    """
+    today = date.today()
+    date_fields = ["date", "date_or_period", "anniversary_date", "timing"]
+
+    for field in date_fields:
+        raw = item.get(field, "")
+        if not raw or not isinstance(raw, str):
+            continue
+
+        # Try common date formats
+        for fmt in ("%Y-%m-%d", "%Y-%m", "%B %Y", "%b %Y"):
+            try:
+                parsed = datetime.strptime(raw.strip()[:10], fmt).date()
+                if parsed < today:
+                    return True  # Past event — exclude
+                return False     # Future event — keep
+            except ValueError:
+                continue
+
+        # Check for year-only match — if it is a past year, exclude
+        import re
+        year_match = re.search(r"\b(20\d{2})\b", raw)
+        if year_match:
+            year = int(year_match.group(1))
+            if year < today.year:
+                return True  # Past year — exclude
+            if year > today.year:
+                return False  # Future year — keep
+            # Same year — cannot determine month, keep it
+            return False
+
+    return False  # No parseable date — keep by default
+
+
 def _extract_local_trends(report: dict[str, Any]) -> list[str]:
     """
     Extracts city/country-specific trend signals from local_events,
     local_cultural_moments, upcoming_holidays, and seasonal_events
     into a flat list of label strings.
+
+    Filters out any event whose date field parses to before today
+    to prevent past events (e.g. a Ramadan that ended months ago)
+    from appearing as campaign recommendations.
     """
     labels: list[str] = []
     seen: set[str] = set()
+    skipped: list[str] = []
 
     source_map = [
-        ("local_events", "event_name"),
-        ("local_cultural_moments", "moment"),
-        ("upcoming_holidays", "holiday_name"),
-        ("seasonal_events", "event_name"),
+        ("local_events",          "event_name"),
+        ("local_cultural_moments","moment"),
+        ("upcoming_holidays",     "holiday_name"),
+        ("seasonal_events",       "event_name"),
     ]
 
     for category, field in source_map:
@@ -1034,6 +909,16 @@ def _extract_local_trends(report: dict[str, Any]) -> list[str]:
         for item in items:
             if not isinstance(item, dict) or _is_insufficient(item):
                 continue
+
+            # Skip events whose date is in the past
+            if _is_event_in_past(item):
+                label = item.get(field, "unknown")
+                skipped.append(f"{label} (past event — excluded)")
+                logger.debug(
+                    "Past event filtered out from local_trends: %s", label
+                )
+                continue
+
             label = item.get(field, "")
             if (
                 label
@@ -1043,6 +928,11 @@ def _extract_local_trends(report: dict[str, Any]) -> list[str]:
             ):
                 seen.add(label.strip())
                 labels.append(label.strip())
+
+    if skipped:
+        logger.info(
+            "Past events filtered from local_trends: %s", skipped
+        )
 
     return labels
 
@@ -1184,13 +1074,12 @@ async def trend_research_node(state: ContentState) -> dict[str, Any]:
         )
 
         # ------------------------------------------------------------
-        # Step 5: Call LLM and parse (with auto-retry on 413)
+        # Step 5: Call LLM and parse
         # ------------------------------------------------------------
         parsed_report = await _call_llm_and_parse(
             human_message=human_message,
             llm=llm,
             brand_name=brand_name,
-            raw_results=raw_results,   # passed for reduced-evidence retry
         )
 
         # ------------------------------------------------------------
