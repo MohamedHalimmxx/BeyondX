@@ -207,7 +207,7 @@ Runs on `http://localhost:5173`
 
 <br/>
 
-*"We built BeyondX because we believe every business deserves enterprise-level marketing intelligence — not just the ones that can afford an agency."*
+*"We built BeyondX because we believe every business deserves enterprise-level marketing intelligence, not just the ones that can afford an agency."*
 
 </div>
 
