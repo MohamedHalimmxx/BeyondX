@@ -37,8 +37,8 @@ Instead of hiring researchers, strategists, branding experts, and content teams 
 
 BeyondX is built around **two phases**, each deployable independently or together:
 
-| | Phase | What It Does |
-|---|---|---|
+| Phase | What It Does 
+|---|---|
 **Phase One — AI Brand Builder** | Transforms a business idea into a full, market-ready brand |
 **Phase Two — AI Content Creator** | Operates as a persistent AI marketing brain for ongoing campaigns and content |
 
