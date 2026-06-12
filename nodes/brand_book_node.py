@@ -284,6 +284,18 @@ COLOR APPLICATION:
   - Primary color is atmosphere: use as background sections, not just text
   - Gradients between primary and secondary where appropriate
   - Accent color is precious: use for CTAs, highlights, key numbers only
+  - EVERY button and CTA on the page (including the final waitlist/email button) MUST use var(--color-accent) as its background. Never introduce any color not defined in --color-primary/--color-secondary/--color-accent/--color-bg/--color-text.
+
+COLOR SWATCHES (Visual Identity section):
+  - Each color from the brief is a labeled card: a colored block (minimum 140px height, rounded corners) with the color NAME and HEX CODE displayed below or overlaid on it in readable text
+  - Never render a bare colored rectangle with no label — every swatch must show its name and hex
+  - Arrange swatches in a responsive grid (3 columns desktop, 1 column mobile), equal card sizes
+
+LOGO DISPLAY (Visual Identity section):
+  - Each {{LOGO_N}} goes inside its own card: neutral or white background, 40-60px internal padding, rounded corners, fixed height (240-320px), with the image set to object-fit: contain so it never overflows or renders at raw size
+  - Label each card "Concept 1", "Concept 2", "Concept 3" respectively
+  - Arrange logo cards in a 3-column grid on desktop, stacked on mobile
+  - Never place a raw <img> directly on the page background at full resolution
 
 INTERACTIVE CHART:
   - Scatter plot with competitor dots labeled
@@ -296,8 +308,9 @@ CTA SECTION:
   - Full-width with brand primary color as background
   - Email input styled to match brand (not default browser input)
   - Button copy specific to this brand (not "Subscribe" or "Sign Up")
+  - Button background MUST be var(--color-accent) — no exceptions
   - Supporting copy in brand voice
-
+  
 ═══════════════════════════════════════════════════
 PRINCIPLE 3 — PROVIDE EXAMPLES: WHAT BAD LOOKS LIKE
 ═══════════════════════════════════════════════════

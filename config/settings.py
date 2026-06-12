@@ -22,6 +22,7 @@ class AppSettings(BaseSettings):
     GROQ_STRATEGY_KEY: Optional[SecretStr] = Field(default=None)
     GROQ_NAMING_KEY: Optional[SecretStr] = Field(default=None)
     GROQ_BRAND_IDENTITY_KEY: Optional[SecretStr] = Field(default=None)
+    GROQ_BRAND_BOOK_KEY: Optional[SecretStr] = Field(default=None)
 
     # ── Gemini keys — Stage 6 visual brief (Flash text) ──────────────────
     GEMINI_VISUAL_KEY_1: Optional[SecretStr] = Field(default=None)
@@ -54,6 +55,7 @@ class AppSettings(BaseSettings):
     TAVILY_API_KEY: SecretStr = Field(...)
     GOOGLE_PLACES_API_KEY: SecretStr = Field(...)
     HF_API_KEY: Optional[SecretStr] = Field(default=None)
+    HF_API_KEY_2: Optional[SecretStr] = Field(default=None)
 
     # ── Model config ──────────────────────────────────────────────────────
     FAST_LLM_MODEL: str = Field(default="llama-3.1-8b-instant")

@@ -15,8 +15,8 @@ The non-negotiable is the brand's spine. Every element — mission, vision, voic
 If you can swap this output into a competitor's brand document without changing a word, rewrite it.
 
 SPECIFICITY RULES — apply to every field:
-- Origin story: must include ONE named founder, ONE specific triggering moment, and ONE specific
-  number from the market context. No "a team of enthusiasts." No "in the heart of [city]."
+- Origin story: must include ONE specific triggering moment and ONE specific number from the market
+  context. Do NOT invent founder names. Use "the founding team", "the founders", or "the team" instead.
 - Tagline: maximum 6 words. Must only work for this brand. If a competitor could use it unchanged, rewrite it.
 - Personality traits: no generic words (innovative, trustworthy, passionate, dynamic). Each trait
   must feel surprising and specific to this brand only.
@@ -25,24 +25,24 @@ SPECIFICITY RULES — apply to every field:
 ORIGIN STORY ARCHETYPES — pick ONE based on the brand:
 
 ARCHETYPE 1 — THE REBEL (use for: consumer brands, food, lifestyle, youth-facing)
-  Tone: punchy, irreverent, anti-establishment. The founder saw something broken and refused to accept it.
+  Tone: punchy, irreverent, anti-establishment. The founding team saw something broken and refused to accept it.
   Feel: like a manifesto. Short sentences. Attitude. The brand is fighting something.
-  Example feel: "Everyone said frozen beef was fine. Ahmed knew it wasn't. So he bought a grinder."
+  Example feel: "Everyone said frozen beef was fine. The team knew it wasn't. So they bought a grinder."
 
 ARCHETYPE 2 — THE DISCOVERY (use for: tech, SaaS, data, AI products)
-  Tone: curious, precise, problem-obsessed. The founder found a gap in the data that no one else noticed.
+  Tone: curious, precise, problem-obsessed. The founders found a gap in the data that no one else noticed.
   Feel: like an engineer's notebook. Specific numbers. A moment of clarity. The insight that changed everything.
-  Example feel: "The spreadsheet showed 23% waste. Every week. For three years. Karim finally asked why."
+  Example feel: "The spreadsheet showed 23% waste. Every week. For three years. The team finally asked why."
 
 ARCHETYPE 3 — THE MISSION (use for: education, health, social impact, access)
-  Tone: warm, purposeful, human. The founder witnessed inequality or injustice and decided to fix it.
+  Tone: warm, purposeful, human. The founders witnessed inequality or injustice and decided to fix it.
   Feel: like a letter to the customer. Personal. The brand exists to give someone something they deserved all along.
-  Example feel: "Sara passed her engineering exam on the third try. Not because she was brilliant. Because she finally had a tutor who understood her."
+  Example feel: "A student passed her engineering exam on the third try. Not because she was brilliant. Because she finally had a tutor who understood her."
 
 ARCHETYPE 4 — THE CRAFT (use for: premium, artisanal, heritage, luxury)
-  Tone: deliberate, obsessive, detail-oriented. The founder spent years perfecting something others rushed.
+  Tone: deliberate, obsessive, detail-oriented. The founding team spent years perfecting something others rushed.
   Feel: like a chef's journal. Slow sentences. Specific ingredients. The pursuit of one thing done right.
-  Example feel: "Youssef ground the beef himself every morning for 400 days before he opened the truck."
+  Example feel: "They ground the beef themselves every morning for 400 days before opening the truck."
 
 Select the archetype that fits the brand's category, audience, and non-negotiable.
 Then write the origin story in that voice — not a description of the archetype, but the actual story."""
@@ -97,7 +97,7 @@ YOUR TASK
    State the archetype in one word at the start: "Archetype: REBEL" — then write the story.
 
    REQUIRED ELEMENTS — all three must appear:
-   a) A named founder (invent one believable name — first and last)
+   a) Refer to the founding team as "the founders", "the founding team", or "the team" — never invent names
    b) One specific triggering moment — not "saw a problem", but what exactly they witnessed
    c) One specific number from the market context (waste %, price, review count, revenue lost)
 

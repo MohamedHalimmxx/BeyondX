@@ -181,32 +181,40 @@ def _get_logo_clients() -> list[tuple]:
 # ── HuggingFace fallback ──────────────────────────────────────────────────────
 
 async def _generate_logo_huggingface(prompt: str, filepath: Path) -> bool:
-    hf_key = getattr(settings, "HF_API_KEY", None)
-    if not hf_key:
-        return False
-    try:
-        from huggingface_hub import InferenceClient
-        logger.info("Trying HuggingFace FLUX.1-schnell (fal-ai provider)...")
+    import httpx
 
-        def _generate():
-            client = InferenceClient(
-                provider="fal-ai",
-                api_key=hf_key.get_secret_value(),
-            )
-            return client.text_to_image(
-                prompt,
-                model="black-forest-labs/FLUX.1-schnell",
-            )
+    hf_keys = [
+        getattr(settings, "HF_API_KEY", None),
+        getattr(settings, "HF_API_KEY_2", None),
+    ]
+    for hf_key in hf_keys:
+        if not hf_key:
+            continue
+        try:
+            logger.info("Trying HuggingFace FLUX.1-schnell (fal-ai)...")
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    "https://router.huggingface.co/fal-ai/fal-ai/flux/schnell",
+                    headers={
+                        "Authorization": f"Bearer {hf_key.get_secret_value()}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"prompt": prompt},
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-        image = await asyncio.to_thread(_generate)
-        image.save(str(filepath))
-        logger.info(f"HuggingFace logo saved: {filepath}")
-        return True
-    except Exception as e:
-        logger.warning(f"HuggingFace request failed: {e}")
-        return False
+                image_url = data["images"][0]["url"]
+                img_resp = await client.get(image_url)
+                img_resp.raise_for_status()
+                filepath.write_bytes(img_resp.content)
 
-
+            logger.info(f"HuggingFace logo saved: {filepath}")
+            return True
+        except Exception as e:
+            logger.warning(f"HuggingFace request failed: {e}. Trying next key.")
+            continue
+    return False
 # ── Step 1: Visual brief ──────────────────────────────────────────────────────
 
 async def _generate_visual_brief(
@@ -385,9 +393,15 @@ async def _generate_single_logo(
     concept_num: int,
     total: int,
 ) -> bool:
+    # Try HuggingFace FLUX first — fast and has working free tier
+    logger.info(f"Generating logo {concept_num}/{total} with HuggingFace FLUX...")
+    if await _generate_logo_huggingface(positive_prompt, filepath):
+        return True
+
+    # Fallback to Gemini if HF fails
+    logger.info(f"HuggingFace failed for logo {concept_num} — trying Gemini fallback...")
     for client, label in logo_clients:
         try:
-            logger.info(f"Generating logo {concept_num}/{total} with Gemini image ({label}).")
             response = await asyncio.to_thread(
                 client.models.generate_content,
                 model=settings.GEMINI_IMAGE_MODEL,
@@ -404,14 +418,11 @@ async def _generate_single_logo(
         except Exception as e:
             if _is_quota_error(e):
                 logger.warning(f"Gemini image ({label}) quota exhausted for logo {concept_num}. Trying next key.")
-                await asyncio.sleep(5)
                 continue
             logger.warning(f"Gemini image ({label}) failed for logo {concept_num}: {str(e)[:100]}")
-            await asyncio.sleep(10)
             continue
 
-    logger.info(f"All Gemini image keys exhausted for logo {concept_num} — trying HuggingFace FLUX...")
-    return await _generate_logo_huggingface(positive_prompt, filepath)
+    return False
 
 
 # ── Main logo generation pipeline ────────────────────────────────────────────
