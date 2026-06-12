@@ -42,9 +42,9 @@ def _get_brand_book_keys() -> list[tuple[str, str]]:
 
 def _build_groq_llm(key_value: str) -> ChatGroq:
     return ChatGroq(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         temperature=0.7,
-        max_tokens=8000,
+        max_tokens=16000,
         api_key=key_value,
     )
 

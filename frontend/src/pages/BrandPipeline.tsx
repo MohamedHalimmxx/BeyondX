@@ -361,7 +361,7 @@ function BrandResults({ result }: { result: Record<string, unknown> }) {
               )}
               {result.brand_book_path && (
                 <a
-                  href={`file://${result.brand_book_path}`}
+                  href={`http://localhost:8000${result.brand_book_path}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="border border-border hover:border-charcoal text-charcoal text-sm font-medium px-6 py-3 rounded-full transition-colors"

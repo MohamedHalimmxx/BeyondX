@@ -58,8 +58,8 @@ const PIPELINE = [
   { n: '03', name: 'Go-to-market strategy', desc: '90-day playbook, channel matrix, copy hooks, and launch roadmap', model: 'Groq' },
   { n: '04', name: 'Brand naming', desc: '15 candidates scored on positioning fit, domain availability, and trademark conflicts', model: 'Groq + Tavily' },
   { n: '05', name: 'Brand identity', desc: 'Mission, origin story, personality, voice, values, and tagline', model: 'Groq' },
-  { n: '06', name: 'Visual identity', desc: 'Color palette, typography system, and three logo concepts generated as images', model: 'Gemini' },
-  { n: '07', name: 'Brand deck', desc: 'Premium, presentation-ready brand deck with positioning chart and full visual system', model: 'Gemini Pro' },
+  { n: '06', name: 'Visual identity', desc: 'Color palette, typography system, and three logo concepts generated as images', model: 'FLUX.1' },
+  { n: '07', name: 'Brand deck', desc: 'Premium, presentation-ready brand deck with positioning chart and full visual system', model: 'Groq' },
   { n: '08', name: 'Live web app', desc: 'Full React application deployed live — shareable URL, production-ready', model: 'Lovable' },
 ]
 
