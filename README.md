@@ -73,9 +73,10 @@ USER INPUT
 ┌─────────────────────────────────────────┐
 │         PHASE ONE: AI Brand Builder     │
 │                                         │
-│  Market Research → Analyst → Strategy   │
-│       → Naming → Brand Book             │
-│    → Brand Identity → Web Builder       │
+│  Market Research → Analyst → Strategy
+       → Naming → Brand Identity
+    → Visual Identity → Brand Book
+         → Web Deployment      │
 │                                         │
 │           Market-Ready Brand            │
 └──────────────────┬──────────────────────┘
@@ -98,8 +99,7 @@ USER INPUT
 ---
 
 ## Phase One — AI Brand Builder
-
-Seven autonomous agents work in sequence to turn a raw idea into a complete brand.
+Eight autonomous agents work in sequence to turn a raw idea into a complete, deployable brand.
 
 | # | Agent | Outputs |
 |---|---|---|
@@ -108,8 +108,9 @@ Seven autonomous agents work in sequence to turn a raw idea into a complete bran
 | 3 | **Go-to-Market Strategy** | Strategic Roadmap, Launch Strategy, Growth Plan |
 | 4 | **Brand Naming** | Brand Name Options, Naming Strategy, Domain Suggestions |
 | 5 | **Brand Identity** | Mission, Vision, Core Values, Brand Voice, Personality |
-| 6 | **Brand Book** | Logo Direction, Color Palette, Typography, Identity Guidelines |
-| 7 | **Web Builder** | Landing Page Blueprint, Website Copy, Wireframes |
+| 6 | **Visual Identity** | Color Palette, Typography, Logo Concepts |
+| 7 | **Brand Book** | Brand Experience Page, Visual Storytelling |
+| 8 | **Web Builder** | Live Web App (Lovable / Claude Code + MCP) |
 
 ---
 
