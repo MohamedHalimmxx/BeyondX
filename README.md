@@ -51,9 +51,9 @@ BeyondX replaces the entire agency model with an **autonomous, multi-agent AI wo
 | Traditional Agency | BeyondX |
 |---|---|
 | Market Research Team | Market Research Agent |
-| Strategy Consultants | Strategy Agent |
+| Strategy Consultants | Go-to-Market Strategy Agent |
 | Branding Studio | Brand Book + Brand Identity Agent |
-| Naming Consultants | Naming Agent |
+| Naming Consultants | Brand Naming Agent |
 | Web Designers | Web Builder Agent |
 | Content Team | AI Content Creator |
 | Campaign Managers | Campaign Generation Engine |
@@ -105,10 +105,10 @@ Seven autonomous agents work in sequence to turn a raw idea into a complete bran
 |---|---|---|
 | 1 | **Market Research** | Market Insights, Competitor Landscape, Opportunity Report |
 | 2 | **Analyst** | Positioning Map, White Space Analysis, Competitive Intelligence |
-| 3 | **Strategy** | Strategic Roadmap, Launch Strategy, Growth Plan |
-| 4 | **Naming** | Brand Name Options, Naming Strategy, Domain Suggestions |
-| 5 | **Brand Book** | Mission, Vision, Core Values, Brand Voice, Personality |
-| 6 | **Brand Identity** | Logo Direction, Color Palette, Typography, Identity Guidelines |
+| 3 | **Go-to-Market Strategy** | Strategic Roadmap, Launch Strategy, Growth Plan |
+| 4 | **Brand Naming** | Brand Name Options, Naming Strategy, Domain Suggestions |
+| 5 | **Brand Identity** | Mission, Vision, Core Values, Brand Voice, Personality |
+| 6 | **Brand Book** | Logo Direction, Color Palette, Typography, Identity Guidelines |
 | 7 | **Web Builder** | Landing Page Blueprint, Website Copy, Wireframes |
 
 ---
