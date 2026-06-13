@@ -140,7 +140,7 @@ function ResultsSummary({ result }: { result: Record<string, unknown> }) {
                     <span className="text-xs bg-cream-dark text-muted px-2 py-0.5 rounded">{p.content_type}</span>
                   </div>
                   <p className="text-xs font-medium text-charcoal mb-1">{p.topic}</p>
-                  <p className="text-xs text-muted line-clamp-2">{p.caption}</p>
+                  <p className="text-xs text-muted whitespace-pre-wrap">{p.caption}</p>
                   {p.hashtags?.length > 0 && <p className="text-xs text-coral mt-1">{p.hashtags.slice(0, 4).join(' ')}</p>}
                 </div>
               ))}
@@ -159,7 +159,7 @@ function ResultsSummary({ result }: { result: Record<string, unknown> }) {
               {campaigns.map((c, i) => (
                 <div key={i} className="border border-border rounded-lg p-3">
                   <p className="text-xs font-medium text-charcoal">{c.name}</p>
-                  <p className="text-xs text-muted">{c.duration_days} days · {String(c.objective).slice(0, 80)}...</p>
+                  <p className="text-xs text-muted">{c.duration_days} days · {c.objective}</p>
                 </div>
               ))}
             </div>
