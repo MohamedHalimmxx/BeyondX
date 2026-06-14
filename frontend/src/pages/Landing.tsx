@@ -306,7 +306,7 @@ export default function Landing() {
 
       {/* ── FOOTER ── */}
       <footer className="border-t border-border px-6 py-10 max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-        <img src="/logo.png" alt="BeyondX" className="h-8 object-contain" />
+        <img src="/logo.png" alt="BeyondX" className="h-16 object-contain" />
         <div className="flex flex-col sm:items-end items-center gap-1">
           <span className="text-xs text-muted">AI-powered brand intelligence</span>
           <span className="text-xs text-muted/60">Founded by Hana Haridy &amp; Mohamed Abdelhalim</span>

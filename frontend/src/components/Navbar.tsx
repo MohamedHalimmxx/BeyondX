@@ -26,7 +26,7 @@ export default function Navbar() {
           src="/logo.png"
           alt="BeyondX"
           onClick={() => navigate('/')}
-          className="h-10 cursor-pointer object-contain"
+          className="h-16 cursor-pointer object-contain"
         />
 
         {isLanding && (
