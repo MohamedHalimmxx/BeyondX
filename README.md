@@ -71,12 +71,12 @@ USER INPUT
     │
     ▼
 ┌─────────────────────────────────────────┐
-│         PHASE ONE: AI Brand Builder     │
+│       PHASE ONE: AI Brand Builder       │
 │                                         │
-│  Market Research → Analyst → Strategy
-       → Naming → Brand Identity
-    → Visual Identity → Brand Book
-         → Web Deployment      │
+│  Market Research → Analyst → Strategy   │
+│        → Naming → Brand Identity        │
+│      → Visual Identity → Brand Book     │
+│           → Web Deployment              │
 │                                         │
 │           Market-Ready Brand            │
 └──────────────────┬──────────────────────┘
