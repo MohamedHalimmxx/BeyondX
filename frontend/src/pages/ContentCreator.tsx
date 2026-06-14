@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, Component } from 'react'
+import type { ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
@@ -27,6 +28,24 @@ interface Session {
 }
 
 const genId = () => Math.random().toString(36).slice(2)
+
+// Safely render any value (string, number, object, array) as text.
+// Prevents "Objects are not valid as a React child" crashes when
+// backend fields don't exactly match the expected shape.
+const renderAsText = (value: unknown): string => {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return value.map(renderAsText).join('\n')
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return String(value)
+    }
+  }
+  return String(value)
+}
 
 const SUGGESTIONS = [
   "Give me next month's content strategy",
@@ -95,24 +114,247 @@ function MessageBubble({ msg }: { msg: Message }) {
   )
 }
 
+// ── Types matching content_state.py / content_creator_agent.py exactly ─────
+
+interface PostEntry {
+  post_number?: number
+  week?: number
+  day_of_week?: string
+  platform: string
+  content_pillar?: string
+  content_type: string
+  topic: string
+  caption: string
+  hashtags: string[]
+  cta?: string
+  reel_script?: string | null   // plain text, only when content_type === "Reel"
+  evidence_sources?: string[]
+}
+
+interface CampaignIdea {
+  name: string
+  objective: string
+  duration_days: number
+  platforms?: string[]
+  core_message?: string
+  content_formats?: string[]
+  hook?: string
+  cta?: string
+  kpis?: string[]
+  evidence_sources?: string[]
+}
+
+interface AnniversaryCampaign {
+  year_milestone?: number
+  anniversary_date?: string
+  campaign_name?: string
+  theme?: string
+  key_message?: string
+  content_pieces?: string[]
+  platforms?: string[]
+  hashtag?: string
+  cta?: string
+  evidence_sources?: string[]
+}
+
+interface ContentPillar {
+  name: string
+  description?: string
+  percentage: number
+}
+
+interface CalendarSlot {
+  post_number?: number
+  week?: number
+  day_of_week?: string
+  platform: string
+  content_pillar?: string
+  content_type: string
+  topic?: string
+}
+
+// Catches render errors inside ResultsSummary so a bad/unexpected field
+// shows a fallback card instead of white-screening the whole chat session.
+class ResultsErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+  componentDidCatch(error: unknown) {
+    console.error('ResultsSummary render error:', error)
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="bg-white border border-border rounded-2xl overflow-hidden mb-4 px-4 py-3">
+          <p className="text-sm text-charcoal font-medium">Content pack generated</p>
+          <p className="text-xs text-muted mt-1">
+            Some result details couldn't be displayed here, but your content was generated successfully.
+            You can ask the assistant directly for posts, captions, or campaigns.
+          </p>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 function ResultsSummary({ result }: { result: Record<string, unknown> }) {
-  const posts = result.generated_posts as Array<{ platform: string; content_type: string; topic: string; caption: string; hashtags: string[] }> || []
-  const campaigns = result.campaign_ideas as Array<{ name: string; duration_days: number; objective: string }> || []
-  const pillars = result.content_pillars as Array<{ name: string; percentage: number }> || []
+  const posts = (result.generated_posts as PostEntry[]) || []
+  const campaigns = (result.campaign_ideas as CampaignIdea[]) || []
+  const pillars = (result.content_pillars as ContentPillar[]) || []
+  const calendar = (result.content_calendar as CalendarSlot[]) || []
+  const brandProfile = result.brand_profile as Record<string, unknown> | undefined
+  const contentStrategy = result.content_strategy as Record<string, unknown> | undefined
+  const anniversary = result.anniversary_campaign as AnniversaryCampaign | undefined
+  const hashtagBank = result.hashtag_bank as Record<string, Record<string, string[]>> | undefined
+  const ctaBank = (result.cta_bank as string[]) || []
+  const trendingTopics = (result.trending_topics as string[]) || []
+  const localTrends = (result.local_trends as string[]) || []
+  const status = result.status as string | undefined
+
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [expandedPost, setExpandedPost] = useState<number | null>(null)
+
+  const toggle = (key: string) => setExpanded(expanded === key ? null : key)
 
   return (
     <div className="bg-white border border-border rounded-2xl overflow-hidden mb-4">
       <div className="bg-charcoal px-4 py-3 flex items-center justify-between">
         <span className="text-white text-sm font-medium font-display">Content pack ready</span>
-        <span className="text-white/50 text-xs">{posts.length} posts · {campaigns.length} campaigns</span>
+        <div className="flex items-center gap-2">
+          {status && status !== 'success' && (
+            <span className={`text-xs px-2 py-0.5 rounded-full ${status === 'partial' ? 'bg-amber-500/20 text-amber-300' : 'bg-red-500/20 text-red-300'}`}>
+              {status}
+            </span>
+          )}
+          <span className="text-white/50 text-xs">{posts.length} posts · {campaigns.length} campaigns</span>
+        </div>
       </div>
+
+
+      {/* Brand Profile */}
+      {brandProfile && Object.keys(brandProfile).length > 0 && (
+        <div className="px-4 py-3 border-b border-border">
+          <button onClick={() => toggle('profile')} className="flex items-center justify-between w-full text-left">
+            <p className="text-xs text-muted uppercase tracking-wider">Brand profile</p>
+            <span className="text-xs text-muted">{expanded === 'profile' ? '▲' : '▼'}</span>
+          </button>
+          {expanded === 'profile' && (
+            <div className="mt-3 space-y-2 text-xs text-charcoal">
+              {typeof brandProfile.summary === 'string' && <p className="whitespace-pre-wrap">{brandProfile.summary}</p>}
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                {brandProfile.brand_age_years != null && (
+                  <div><span className="text-muted">Brand age: </span>{String(brandProfile.brand_age_years)} yrs</div>
+                )}
+                {typeof brandProfile.brand_tone === 'string' && (
+                  <div><span className="text-muted">Tone: </span>{brandProfile.brand_tone}</div>
+                )}
+                {typeof brandProfile.content_language === 'string' && (
+                  <div><span className="text-muted">Language: </span>{brandProfile.content_language}</div>
+                )}
+              </div>
+              {typeof brandProfile.target_audience === 'string' && (
+                <div><span className="text-muted">Target audience: </span><span className="whitespace-pre-wrap">{brandProfile.target_audience}</span></div>
+              )}
+              {typeof brandProfile.unique_value_prop === 'string' && (
+                <div><span className="text-muted">Value prop: </span><span className="whitespace-pre-wrap">{brandProfile.unique_value_prop}</span></div>
+              )}
+              {typeof brandProfile.market_positioning === 'string' && (
+                <div><span className="text-muted">Market position: </span><span className="whitespace-pre-wrap">{brandProfile.market_positioning}</span></div>
+              )}
+              {typeof brandProfile.cultural_context === 'string' && (
+                <div><span className="text-muted">Cultural context: </span><span className="whitespace-pre-wrap">{brandProfile.cultural_context}</span></div>
+              )}
+              {Array.isArray(brandProfile.audience_pain_points) && brandProfile.audience_pain_points.length > 0 && (
+                <div>
+                  <span className="text-muted">Pain points:</span>
+                  <ul className="list-disc list-inside mt-1 space-y-0.5">
+                    {(brandProfile.audience_pain_points as string[]).map((pp, i) => <li key={i}>{pp}</li>)}
+                  </ul>
+                </div>
+              )}
+              {Array.isArray(brandProfile.content_opportunities) && brandProfile.content_opportunities.length > 0 && (
+                <div>
+                  <span className="text-muted">Content opportunities:</span>
+                  <ul className="list-disc list-inside mt-1 space-y-0.5">
+                    {(brandProfile.content_opportunities as string[]).map((co, i) => <li key={i}>{co}</li>)}
+                  </ul>
+                </div>
+              )}
+              {Array.isArray(brandProfile.evidence_used) && brandProfile.evidence_used.length > 0 && (
+                <div>
+                  <span className="text-muted">Evidence used ({(brandProfile.evidence_used as string[]).length}):</span>
+                  <ul className="list-disc list-inside mt-1 space-y-0.5 text-muted">
+                    {(brandProfile.evidence_used as string[]).map((ev, i) => <li key={i}>{ev}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Content Strategy */}
+      {contentStrategy && Object.keys(contentStrategy).length > 0 && (
+        <div className="px-4 py-3 border-b border-border">
+          <button onClick={() => toggle('strategy')} className="flex items-center justify-between w-full text-left">
+            <p className="text-xs text-muted uppercase tracking-wider">Content strategy</p>
+            <span className="text-xs text-muted">{expanded === 'strategy' ? '▲' : '▼'}</span>
+          </button>
+          {expanded === 'strategy' && (
+            <div className="mt-3 space-y-2 text-xs text-charcoal">
+              {typeof contentStrategy.strategic_goal === 'string' && (
+                <div><span className="text-muted">Strategic goal: </span><span className="whitespace-pre-wrap">{contentStrategy.strategic_goal}</span></div>
+              )}
+              {typeof contentStrategy.audience_insight === 'string' && (
+                <div><span className="text-muted">Audience insight: </span><span className="whitespace-pre-wrap">{contentStrategy.audience_insight}</span></div>
+              )}
+              {typeof contentStrategy.confidence === 'string' && (
+                <div><span className="text-muted">Confidence: </span>{contentStrategy.confidence}</div>
+              )}
+              {contentStrategy.content_mix && typeof contentStrategy.content_mix === 'object' && (
+                <div>
+                  <span className="text-muted">Content mix:</span>
+                  <div className="space-y-1 mt-1">
+                    {Object.entries(contentStrategy.content_mix as Record<string, number>).map(([k, v]) => (
+                      <div key={k} className="flex justify-between">
+                        <span>{k}</span><span className="text-coral">{v}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {contentStrategy.platform_strategy && typeof contentStrategy.platform_strategy === 'object' && (
+                <div>
+                  <span className="text-muted">Platform strategy:</span>
+                  <div className="space-y-1 mt-1">
+                    {Object.entries(contentStrategy.platform_strategy as Record<string, unknown>).map(([platform, strat]) => (
+                      <div key={platform}>
+                        <span className="font-medium">{platform}: </span>
+                        {typeof strat === 'object' && strat !== null
+                          ? Object.entries(strat as Record<string, unknown>).map(([k, v]) => `${k}: ${String(v)}`).join(' · ')
+                          : String(strat)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Content Pillars */}
       {pillars.length > 0 && (
         <div className="px-4 py-3 border-b border-border">
           <p className="text-xs text-muted uppercase tracking-wider mb-2">Content pillars</p>
           <div className="space-y-2">
-            {pillars.map(p => (
-              <div key={p.name}>
+            {pillars.map((p, i) => (
+              <div key={i}>
                 <div className="flex justify-between text-xs mb-0.5">
                   <span className="text-charcoal font-medium">{p.name}</span>
                   <span className="text-coral">{p.percentage}%</span>
@@ -120,48 +362,273 @@ function ResultsSummary({ result }: { result: Record<string, unknown> }) {
                 <div className="h-1 bg-border rounded-full overflow-hidden">
                   <div className="h-full bg-coral rounded-full" style={{ width: `${p.percentage}%` }} />
                 </div>
+                {p.description && <p className="text-xs text-muted mt-1 whitespace-pre-wrap">{p.description}</p>}
               </div>
             ))}
           </div>
         </div>
       )}
+
+      {/* Calendar Overview */}
+      {calendar.length > 0 && (
+        <div className="px-4 py-3 border-b border-border">
+          <button onClick={() => toggle('calendar')} className="flex items-center justify-between w-full text-left">
+            <p className="text-xs text-muted uppercase tracking-wider">Calendar overview ({calendar.length})</p>
+            <span className="text-xs text-muted">{expanded === 'calendar' ? '▲' : '▼'}</span>
+          </button>
+          {expanded === 'calendar' && (
+            <div className="mt-3 space-y-3">
+              {/* By platform */}
+              <div className="text-xs text-charcoal">
+                <span className="text-muted">By platform:</span>
+                <div className="space-y-1 mt-1">
+                  {Object.entries(
+                    calendar.reduce((acc, slot) => {
+                      acc[slot.platform] = (acc[slot.platform] || 0) + 1
+                      return acc
+                    }, {} as Record<string, number>)
+                  ).map(([platform, count]) => (
+                    <div key={platform} className="flex justify-between">
+                      <span>{platform}</span><span className="text-coral">{count} posts</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* By pillar */}
+              <div className="text-xs text-charcoal">
+                <span className="text-muted">By pillar:</span>
+                <div className="space-y-1 mt-1">
+                  {Object.entries(
+                    calendar.reduce((acc, slot) => {
+                      const key = slot.content_pillar || 'Unassigned'
+                      acc[key] = (acc[key] || 0) + 1
+                      return acc
+                    }, {} as Record<string, number>)
+                  ).map(([pillar, count]) => (
+                    <div key={pillar} className="flex justify-between">
+                      <span>{pillar}</span><span className="text-coral">{count} posts</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* By week */}
+              <div className="text-xs text-charcoal">
+                <span className="text-muted">By week:</span>
+                <div className="space-y-1 mt-1">
+                  {Object.entries(
+                    calendar.reduce((acc, slot) => {
+                      const key = slot.week != null ? `Week ${slot.week}` : 'Unscheduled'
+                      acc[key] = (acc[key] || 0) + 1
+                      return acc
+                    }, {} as Record<string, number>)
+                  ).sort(([a], [b]) => a.localeCompare(b)).map(([week, count]) => (
+                    <div key={week} className="flex justify-between">
+                      <span>{week}</span><span className="text-coral">{count} posts</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* Full slot list */}
+              <div className="max-h-64 overflow-y-auto space-y-1.5 mt-2">
+                {calendar.map((slot, i) => (
+                  <div key={i} className="border border-border rounded-lg p-2 text-xs flex flex-wrap items-center gap-2">
+                    {slot.post_number != null && <span className="text-muted font-medium">#{slot.post_number}</span>}
+                    {slot.week != null && slot.day_of_week && <span className="text-muted">Week {slot.week} {slot.day_of_week}</span>}
+                    <span className="bg-cream-dark text-muted px-2 py-0.5 rounded">{slot.platform}</span>
+                    <span className="bg-cream-dark text-muted px-2 py-0.5 rounded">{slot.content_type}</span>
+                    {slot.content_pillar && <span className="bg-cream-dark text-muted px-2 py-0.5 rounded">{slot.content_pillar}</span>}
+                    {slot.topic && <span className="text-charcoal flex-1 min-w-full sm:min-w-0">{slot.topic}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Posts */}
       {posts.length > 0 && (
         <div className="px-4 py-3 border-b border-border">
-          <button onClick={() => setExpanded(expanded === 'posts' ? null : 'posts')} className="flex items-center justify-between w-full text-left">
+          <button onClick={() => toggle('posts')} className="flex items-center justify-between w-full text-left">
             <p className="text-xs text-muted uppercase tracking-wider">Posts ({posts.length})</p>
             <span className="text-xs text-muted">{expanded === 'posts' ? '▲' : '▼'}</span>
           </button>
           {expanded === 'posts' && (
-            <div className="mt-3 space-y-3 max-h-64 overflow-y-auto">
+            <div className="mt-3 space-y-3 max-h-96 overflow-y-auto">
               {posts.map((p, i) => (
                 <div key={i} className="border border-border rounded-lg p-3">
-                  <div className="flex gap-2 mb-1 flex-wrap">
+                  <div className="flex gap-2 mb-1 flex-wrap items-center">
+                    {p.post_number != null && <span className="text-xs text-muted font-medium">#{p.post_number}</span>}
+                    {p.week != null && p.day_of_week && <span className="text-xs text-muted">Week {p.week} {p.day_of_week}</span>}
                     <span className="text-xs bg-cream-dark text-muted px-2 py-0.5 rounded">{p.platform}</span>
                     <span className="text-xs bg-cream-dark text-muted px-2 py-0.5 rounded">{p.content_type}</span>
+                    {p.content_pillar && <span className="text-xs bg-cream-dark text-muted px-2 py-0.5 rounded">{p.content_pillar}</span>}
                   </div>
                   <p className="text-xs font-medium text-charcoal mb-1">{p.topic}</p>
                   <p className="text-xs text-muted whitespace-pre-wrap">{p.caption}</p>
-                  {p.hashtags?.length > 0 && <p className="text-xs text-coral mt-1">{p.hashtags.slice(0, 4).join(' ')}</p>}
+                  {p.hashtags?.length > 0 && <p className="text-xs text-coral mt-1">{p.hashtags.join(' ')}</p>}
+                  {p.cta && (
+                    <p className="text-xs text-charcoal mt-2"><span className="text-muted font-medium">CTA: </span>{renderAsText(p.cta)}</p>
+                  )}
+                  {p.reel_script && (
+                    <div className="mt-2">
+                      <button onClick={() => setExpandedPost(expandedPost === i ? null : i)} className="text-xs text-coral underline">
+                        {expandedPost === i ? 'Hide reel script' : 'Show reel script'}
+                      </button>
+                      {expandedPost === i && (
+                        <div className="mt-2 bg-cream-dark rounded-lg p-2 text-xs text-charcoal whitespace-pre-wrap">
+                          {renderAsText(p.reel_script)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {p.evidence_sources?.length ? (
+                    <p className="text-xs text-muted mt-2">Evidence: {p.evidence_sources.map(renderAsText).join(', ')}</p>
+                  ) : null}
                 </div>
               ))}
             </div>
           )}
         </div>
       )}
+
+      {/* Campaigns */}
       {campaigns.length > 0 && (
-        <div className="px-4 py-3">
-          <button onClick={() => setExpanded(expanded === 'campaigns' ? null : 'campaigns')} className="flex items-center justify-between w-full text-left">
+        <div className="px-4 py-3 border-b border-border">
+          <button onClick={() => toggle('campaigns')} className="flex items-center justify-between w-full text-left">
             <p className="text-xs text-muted uppercase tracking-wider">Campaigns ({campaigns.length})</p>
             <span className="text-xs text-muted">{expanded === 'campaigns' ? '▲' : '▼'}</span>
           </button>
           {expanded === 'campaigns' && (
             <div className="mt-3 space-y-2">
               {campaigns.map((c, i) => (
-                <div key={i} className="border border-border rounded-lg p-3">
+                <div key={i} className="border border-border rounded-lg p-3 space-y-1">
                   <p className="text-xs font-medium text-charcoal">{c.name}</p>
-                  <p className="text-xs text-muted">{c.duration_days} days · {c.objective}</p>
+                  <p className="text-xs text-muted">
+                    {c.duration_days} days{c.platforms?.length ? ` · ${c.platforms.join(', ')}` : ''}
+                    {c.content_formats?.length ? ` · ${c.content_formats.join(', ')}` : ''}
+                  </p>
+                  <p className="text-xs text-charcoal whitespace-pre-wrap"><span className="text-muted">Objective: </span>{c.objective}</p>
+                  {c.core_message && <p className="text-xs text-charcoal whitespace-pre-wrap"><span className="text-muted">Core message: </span>{c.core_message}</p>}
+                  {c.hook && <p className="text-xs text-charcoal whitespace-pre-wrap"><span className="text-muted">Hook: </span>{c.hook}</p>}
+                  {c.cta && <p className="text-xs text-charcoal whitespace-pre-wrap"><span className="text-muted">CTA: </span>{c.cta}</p>}
+                  {c.kpis?.length ? (
+                    <div className="text-xs text-charcoal">
+                      <span className="text-muted">KPIs:</span>
+                      <ul className="list-disc list-inside mt-1 space-y-0.5">
+                        {c.kpis.map((k, ki) => <li key={ki}>{k}</li>)}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {c.evidence_sources?.length ? (
+                    <p className="text-xs text-muted">Evidence: {c.evidence_sources.join(', ')}</p>
+                  ) : null}
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Anniversary Campaign */}
+      {anniversary && Object.keys(anniversary).length > 0 && (
+        <div className="px-4 py-3 border-b border-border">
+          <button onClick={() => toggle('anniversary')} className="flex items-center justify-between w-full text-left">
+            <p className="text-xs text-muted uppercase tracking-wider">🎉 Anniversary campaign</p>
+            <span className="text-xs text-muted">{expanded === 'anniversary' ? '▲' : '▼'}</span>
+          </button>
+          {expanded === 'anniversary' && (
+            <div className="mt-3 border border-border rounded-lg p-3 space-y-1">
+              {anniversary.campaign_name && <p className="text-xs font-medium text-charcoal">{anniversary.campaign_name}</p>}
+              <p className="text-xs text-muted">
+                {anniversary.anniversary_date ? `Date: ${anniversary.anniversary_date}` : ''}
+                {anniversary.year_milestone ? ` · ${anniversary.year_milestone}-year milestone` : ''}
+                {anniversary.platforms?.length ? ` · ${anniversary.platforms.join(', ')}` : ''}
+              </p>
+              {anniversary.theme && <p className="text-xs text-charcoal whitespace-pre-wrap"><span className="text-muted">Theme: </span>{anniversary.theme}</p>}
+              {anniversary.key_message && <p className="text-xs text-charcoal whitespace-pre-wrap"><span className="text-muted">Key message: </span>{anniversary.key_message}</p>}
+              {anniversary.content_pieces?.length ? (
+                <div className="text-xs text-charcoal">
+                  <span className="text-muted">Content pieces:</span>
+                  <ul className="list-disc list-inside mt-1 space-y-0.5">
+                    {anniversary.content_pieces.map((cp, i) => <li key={i}>{cp}</li>)}
+                  </ul>
+                </div>
+              ) : null}
+              {anniversary.hashtag && <p className="text-xs text-coral">{anniversary.hashtag}</p>}
+              {anniversary.cta && <p className="text-xs text-charcoal"><span className="text-muted">CTA: </span>{anniversary.cta}</p>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Hashtag Bank */}
+      {hashtagBank && Object.keys(hashtagBank).length > 0 && (
+        <div className="px-4 py-3 border-b border-border">
+          <button onClick={() => toggle('hashtags')} className="flex items-center justify-between w-full text-left">
+            <p className="text-xs text-muted uppercase tracking-wider">Hashtag bank</p>
+            <span className="text-xs text-muted">{expanded === 'hashtags' ? '▲' : '▼'}</span>
+          </button>
+          {expanded === 'hashtags' && (
+            <div className="mt-3 space-y-3">
+              {Object.entries(hashtagBank).map(([platform, pillarMap]) => (
+                <div key={platform}>
+                  <p className="text-xs font-medium text-charcoal mb-1">{platform}</p>
+                  <div className="space-y-1">
+                    {Object.entries(pillarMap || {}).map(([pillar, tags]) => (
+                      <div key={pillar} className="text-xs">
+                        <span className="text-muted">{pillar}: </span>
+                        <span className="text-coral">{Array.isArray(tags) ? tags.join(' ') : String(tags)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* CTA Bank */}
+      {ctaBank.length > 0 && (
+        <div className="px-4 py-3 border-b border-border">
+          <button onClick={() => toggle('ctabank')} className="flex items-center justify-between w-full text-left">
+            <p className="text-xs text-muted uppercase tracking-wider">CTA bank ({ctaBank.length})</p>
+            <span className="text-xs text-muted">{expanded === 'ctabank' ? '▲' : '▼'}</span>
+          </button>
+          {expanded === 'ctabank' && (
+            <ul className="mt-3 space-y-1 text-xs text-charcoal list-decimal list-inside">
+              {ctaBank.map((cta, i) => <li key={i}>{cta}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* Trending topics & local trends */}
+      {(trendingTopics.length > 0 || localTrends.length > 0) && (
+        <div className="px-4 py-3">
+          <button onClick={() => toggle('trends')} className="flex items-center justify-between w-full text-left">
+            <p className="text-xs text-muted uppercase tracking-wider">Trends used</p>
+            <span className="text-xs text-muted">{expanded === 'trends' ? '▲' : '▼'}</span>
+          </button>
+          {expanded === 'trends' && (
+            <div className="mt-3 space-y-2 text-xs text-charcoal">
+              {trendingTopics.length > 0 && (
+                <div>
+                  <span className="text-muted">Trending topics:</span>
+                  <ul className="list-disc list-inside mt-1 space-y-0.5">
+                    {trendingTopics.map((t, i) => <li key={i}>{t}</li>)}
+                  </ul>
+                </div>
+              )}
+              {localTrends.length > 0 && (
+                <div>
+                  <span className="text-muted">Local trends:</span>
+                  <ul className="list-disc list-inside mt-1 space-y-0.5">
+                    {localTrends.map((t, i) => <li key={i}>{t}</li>)}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -231,7 +698,7 @@ export default function ContentCreator() {
       const brandName = result.brand_name as string
       const posts = (result.generated_posts as unknown[])?.length || 0
       const campaigns = (result.campaign_ideas as unknown[])?.length || 0
-      setSessions(prev => prev.map(s => s.id === activeId ? { ...s, phase: 'chat' as const, result, brandName: brandName || s.brandName, messages: [...s.messages.filter(m => !m.isProgress), { id: genId(), role: 'assistant' as const, content: '', timestamp: new Date(), isResults: true, result }] } : s))
+      setSessions(prev => prev.map(s => s.id === activeId ? { ...s, phase: 'chat' as const, result, brandName: brandName || s.brandName, messages: [...s.messages.filter(m => !m.isProgress), { id: genId(), role: 'assistant' as const, content: '', timestamp: new Date(), isResults: true, result }]} : s))
       addBotMessage(activeId, `Your content pack for **${brandName}** is ready! 🎉\n\nGenerated **${posts} posts** and **${campaigns} campaign ideas**.\n\nWhat would you like to do next?`)
       setTimeout(() => addSuggestions(activeId), 300)
     }
@@ -337,7 +804,9 @@ export default function ContentCreator() {
                       <span className="text-white text-xs font-bold font-display">X</span>
                     </div>
                     <div className="flex-1 max-w-[85%]">
-                      <ResultsSummary result={msg.result} />
+                      <ResultsErrorBoundary>
+                        <ResultsSummary result={msg.result} />
+                      </ResultsErrorBoundary>
                     </div>
                   </motion.div>
                 ) : msg.isSuggestion ? (
